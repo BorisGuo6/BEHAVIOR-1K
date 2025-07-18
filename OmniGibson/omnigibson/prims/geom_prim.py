@@ -543,7 +543,7 @@ class VisualGeomPrim(GeomPrim):
         if "meta" in self.name:
             if "togglebutton" in self.name:
                 # Make sure togglebutton mesh is visible
-                self.purpose = "default"
+                self.purpose = "guide" # TODO: revert this
             elif any(
                 [
                     metalink in self.name
