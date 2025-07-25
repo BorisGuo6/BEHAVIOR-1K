@@ -200,7 +200,7 @@ class Open(AbsoluteObjectState, BooleanStateMixin):
         # The object is open only if it's open from all of its sides.
         return all(sides_openness)
 
-    def _set_value(self, new_value, fully=False):
+    def _set_value(self, new_value, fully=True):
         """
         Set the openness state, either to a random joint position satisfying the new value, or fully open/closed.
 

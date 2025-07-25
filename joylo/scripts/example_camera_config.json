@@ -1,0 +1,52 @@
+{
+  "camera_motions": [
+    {
+      "type": "static",
+      "start_frame": 0,
+      "end_frame": 100,
+      "position": [-2.0, 0.0, 2.0],
+      "orientation": [0.0, 0.0, 0.0, 1.0]
+    },
+    {
+      "type": "orbit",
+      "start_frame": 100,
+      "end_frame": 300,
+      "center_point": [0.0, 0.0, 1.0],
+      "radius": 3.0,
+      "start_angle": 0,
+      "end_angle": 180,
+      "height": 2.5,
+      "look_at_center": true
+    },
+    {
+      "type": "zoom",
+      "start_frame": 300,
+      "end_frame": 450,
+      "start_position": [3.0, 0.0, 2.0],
+      "end_position": [1.5, 0.0, 1.5],
+      "target": [0.0, 0.0, 1.0],
+      "interpolation": "smooth"
+    },
+    {
+      "type": "pan",
+      "start_frame": 450,
+      "start_position": [1.5, 0.0, 1.5],
+      "end_position": [1.5, 3.0, 1.5],
+      "orientation": [0.0, 0.0, 0.0, 1.0],
+      "speed": 0.5,
+      "fps": 30.0,
+      "interpolation": "smooth"
+    },
+    {
+      "type": "orbit",
+      "start_frame": 600,
+      "end_frame": 800,
+      "center_point": [0.0, 0.0, 1.0],
+      "radius": 2.0,
+      "start_angle": 0,
+      "end_angle": 360,
+      "height": 3.0,
+      "look_at_center": true
+    }
+  ]
+} 

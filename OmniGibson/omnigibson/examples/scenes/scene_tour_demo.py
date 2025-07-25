@@ -61,9 +61,9 @@ def main(random_selection=False, headless=False, short_exec=False):
 
     def add_waypoint():
         nonlocal waypoints
-        pos = cam_mover.cam.get_position_orientation()[0]
-        print(f"Added waypoint at {pos}")
-        waypoints.append(pos)
+        pos, ori = cam_mover.cam.get_position_orientation()
+        print(f"Waypoint pose: {pos}, {ori}")
+        waypoints.append((pos, ori))
 
     def clear_waypoints():
         nonlocal waypoints

@@ -194,22 +194,30 @@ class CameraInterpolator:
 
 # Your waypoint data
 waypoints_data = [
-    {"name": "kitchen", "pos": [7.220621109008789, 3.3456919193267822, 1.9912065267562866], "ori": [0.12101273983716965, 0.6048030257225037, 0.7718288898468018, 0.1544322967529297]},
-    {"name": "living room 1", "pos": [9.067486763000488, 3.808771848678589, 1.9579041004180908], "ori": [-0.217719167470932, 0.5649743676185608, 0.7426320910453796, -0.28618156909942627]},
-    {"name": "living room 2", "pos": [16.012439727783203, 3.4376437664031982, 1.3308689594268799], "ori": [-0.47005873918533325, 0.4836804270744324, 0.529464602470398, -0.514553427696228]},
-    {"name": "utility room", "pos": [22.3378849029541, 3.8088228702545166, 1.4146543741226196], "ori": [-0.09348412603139877, 0.6510287523269653, 0.7456264495849609, -0.10706774890422821]},
-    {"name": "outside utility room", "pos": [27.458051681518555, 3.1804323196411133, 1.5083001852035522], "ori": [0.4677571654319763, 0.4838102161884308, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "child room 1", "pos": [27.331565856933594, 6.928299903869629, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "bathroom 1", "pos": [27.19664764404297, 10.926026344299316, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "child room 2", "pos": [27.103891372680664, 13.674463272094727, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "child room 3", "pos": [26.960540771484375, 17.922040939331055, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "bathroom 2", "pos": [26.86778450012207, 20.670467376708984, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "masterbedroom", "pos": [26.7665958404541, 23.668750762939453, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]},
-    {"name": "garden", "pos": [26.564218521118164, 29.66531753540039, 1.5083001852035522], "ori": [0.4677571952342987, 0.483810156583786, 0.5317828059196472, 0.5141381025314331]}
+    {"name": "waypoint1", "pos": [27.2292, 3.7431, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]},
+    {"name": "waypoint2", "pos": [27.2292, 10.4931, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]},
+    {"name": "waypoint3", "pos": [27.2292, 15.7431, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]},
+    {"name": "waypoint4", "pos": [27.2292, 19.4931, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]},
+    {"name": "waypoint5", "pos": [27.2292, 21.7431, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]},
+    {"name": "waypoint6", "pos": [27.2292, 27.2431, 1.2425], "ori": [0.5000, 0.5000, 0.5000, 0.5000]}
 ]
 
 OBJECTS_TO_HIDE = [
-    "sliding_door_tprpvb_7",
+    "clothesline_pole_smrqrw_0",
+    "clothesline_pole_smrqrw_1",
+    "door_kwbnhy_0",
+    "door_kwbnhy_2",
+    "door_kwbnhy_3",
+    "fixed_window_tspbac_0",
+    "fixed_window_tspbac_1",
+    "fixed_window_tspbac_2",
+    "fixed_window_usynui_0",
+    "fixed_window_usynui_2",
+    "fixed_window_usynui_1",
+    # "sliding_door_tprpvb_0",
+    # "sliding_door_tprpvb_1",
+    # "sliding_door_tprpvb_11",
+    # "sliding_door_tprpvb_6",
     "wall_clock_oqmbtp_0",
     "walls_baibaz_0",
     "walls_cjxcfc_0",
@@ -218,23 +226,16 @@ OBJECTS_TO_HIDE = [
     "walls_guxxwh_0",
     "walls_lbxvwa_0",
     "walls_ltqrqp_0",
-    "walls_mianco_0",
     "walls_soubdp_0",
-    "walls_uplnmr_0",
     "walls_zfhsih_0",
-    "tree_rrhqpw_11",
-    "fixed_window_bvqijp_0",
-    "door_kwbnhy_2",
-    "fixed_window_tspbac_2",
     "showerhead_kdvrbf_0",
-    "showerhead_kdvrbf_0",
-    "fixed_window_tspbac_1",
-    "door_kwbnhy_3",
-    "door_kwbnhy_0",
-    "fixed_window_tspbac_0",
-    "fixed_window_usynui_1",
-    "fixed_window_usynui_2",
-    "fixed_window_usynui_0",
+]
+
+SLIDING_DOORS_TO_OPEN = [
+    "sliding_door_tprpvb_0",
+    "sliding_door_tprpvb_1",
+    "sliding_door_tprpvb_11",
+    "sliding_door_tprpvb_6",
 ]
 
 
@@ -265,6 +266,10 @@ KeyboardEventHandler.add_keyboard_callback(
 
 for _ in range(100):
     og.sim.render()
+
+from omnigibson.object_states import *
+for door in SLIDING_DOORS_TO_OPEN:
+    env.scene.object_registry("name", door).states[Open].set_value(True)
 
 interpolator = CameraInterpolator(waypoints_data, target_speed=0.5)
 trajectory = interpolator.generate_trajectory(fps=30.0)
