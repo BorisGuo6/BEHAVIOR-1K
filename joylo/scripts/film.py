@@ -288,11 +288,11 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
             continue
         elif camera_motion_controller and frame_count > camera_motion_controller.motions[0].end_frame:
             break
-        elif frame_count < 1800:
-            env.step_count += 1
-            frame_count += 1
-            continue
-        # elif frame_count > 2800:
+        # elif frame_count < 3000:
+        #     env.step_count += 1
+        #     frame_count += 1
+        #     continue
+        # elif frame_count > 4200:
         #     break
         else:
             if TRIAL_RUN:
