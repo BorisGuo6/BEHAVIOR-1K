@@ -4,6 +4,11 @@ Batch QA Generation Script
 
 Processes multiple task directories from segmented trajectories and generates
 Q&A pairs using the QAGenerationManager class, saving results to JSONL format.
+
+Key parameters:
+- --seed: Random seed for reproducible results (default: 42)
+- --num-to-sample: Number of sequences to sample for multi-step generators (default: 30)
+- --max-qa-num: Maximum number of QA pairs to generate per task (default: 25)
 """
 
 import os
@@ -30,7 +35,7 @@ class BatchQAGenerator:
     Processes multiple task directories to generate Q&A pairs using QAGenerationManager.
     """
     
-    def __init__(self, input_root: str, output_file: str, raw_data_dir: str):
+    def __init__(self, input_root: str, output_file: str, raw_data_dir: str, seed: int = 42, num_to_sample: int = 30, max_qa_num: int = 25):
         """
         Initialize the batch QA generator.
         
@@ -38,10 +43,16 @@ class BatchQAGenerator:
             input_root: Root directory containing segmented task directories
             output_file: Output JSONL file path
             raw_data_dir: Root directory containing raw data
+            seed: Random seed for reproducible results
+            num_to_sample: Number of sequences to sample for multi-step generators
+            max_qa_num: Maximum number of QA pairs to generate per task
         """
         self.input_root = Path(input_root)
         self.output_file = Path(output_file)
         self.raw_data_dir = Path(raw_data_dir)
+        self.seed = seed
+        self.num_to_sample = num_to_sample
+        self.max_qa_num = max_qa_num
         
         if not self.input_root.exists():
             raise FileNotFoundError(f"Input root directory not found: {input_root}")
@@ -87,48 +98,92 @@ class BatchQAGenerator:
                 print("❌ No valid tasks found for QA generation")
                 return
             
-            multi_forward_qa_pairs = []
-            multi_inv_qa_pairs = []
-            step_length = 7
-            # Generate multi-step forward dynamics Q&A pairs for all tasks
-            print("\n⏭️ Generating Multi-Step Forward Dynamics Q&A pairs...")
-            multi_forward_qa_pairs = manager.generate("multi_forward_dynamics", step_length=step_length)
-            print(f"✅ Generated {len(multi_forward_qa_pairs)} multi-step forward dynamics Q&A pairs")
-
-            # Generate multi-step inverse dynamics Q&A pairs for all tasks
-            print("\n⏪ Generating Multi-Step Inverse Dynamics Q&A pairs...")
-            multi_inv_qa_pairs = manager.generate("multi_inverse_dynamics", step_length=step_length)
-            print(f"✅ Generated {len(multi_inv_qa_pairs)} multi-step inverse dynamics Q&A pairs")
+            # Clear output file at the start
+            self.output_file.parent.mkdir(parents=True, exist_ok=True)
+            if self.output_file.exists():
+                self.output_file.unlink()  # Remove existing file
             
-            forward_qa_pairs = []
-            inverse_qa_pairs = []
+            # Define step numbers to generate QAs for
+            step_numbers = [3, 4, 5, 6, 7, 8, 9, 10]  # [3, 4, 5, 6, 7, 8, 9, 10, 20, 30]
             
-            # Generate forward dynamics Q&A pairs for all tasks
-            # print("\n⏭️ Generating Forward Dynamics Q&A pairs...")
-            # forward_qa_pairs = manager.generate("forward_dynamics")
-            # print(f"✅ Generated {len(forward_qa_pairs)} forward dynamics Q&A pairs")
+            # Initialize report structure: report[task_name][step_length][qa_type] = count
+            qa_report = {}
             
-            # Generate inverse dynamics Q&A pairs for all tasks
-            # print("\n⏪ Generating Inverse Dynamics Q&A pairs...")
-            # manager.clear_qa_pairs()
-            # inverse_qa_pairs = manager.generate("inverse_dynamics")
-            # print(f"✅ Generated {len(inverse_qa_pairs)} inverse dynamics Q&A pairs")
+            # Get all task names for report initialization
+            task_names = [task_data.task_name for task_data in manager.task_data_list]
+            for task_name in task_names:
+                qa_report[task_name] = {}
+                for step_num in step_numbers:
+                    qa_report[task_name][step_num] = {
+                        'forward_dynamics': 0,
+                        'inverse_dynamics': 0,
+                        'total': 0
+                    }
             
-            # Combine all QA pairs
-            all_qa_pairs = forward_qa_pairs + inverse_qa_pairs + multi_forward_qa_pairs + multi_inv_qa_pairs
-            manager.qa_pairs = all_qa_pairs
+            # Generate QA pairs for each step number
+            for step_num in step_numbers:
+                print(f"\n{'='*50}")
+                print(f"🔄 Processing Step Number: {step_num}")
+                print(f"{'='*50}")
+                
+                # Generate multi-step forward dynamics Q&A pairs with explicit parameters
+                print(f"\n⏭️ Generating Multi-Step Forward Dynamics Q&A pairs (step={step_num}, samples={self.num_to_sample}, max_qa={self.max_qa_num})...")
+                forward_stats = manager.generate("multi_forward_dynamics", step_length=step_num, qa_gen_logic="ordering", flush_to_file=str(self.output_file), seed=self.seed, num_to_sample=self.num_to_sample, max_qa_num=self.max_qa_num)
+                
+                # Generate multi-step inverse dynamics Q&A pairs with explicit parameters
+                print(f"\n⏪ Generating Multi-Step Inverse Dynamics Q&A pairs (step={step_num}, samples={self.num_to_sample}, max_qa={self.max_qa_num})...")
+                inverse_stats = manager.generate("multi_inverse_dynamics", step_length=step_num, qa_gen_logic="ordering", flush_to_file=str(self.output_file), seed=self.seed, num_to_sample=self.num_to_sample, max_qa_num=self.max_qa_num)
+                
+                # Update report with actual counts
+                for task_name in task_names:
+                    forward_count = forward_stats.get(task_name, 0)
+                    inverse_count = inverse_stats.get(task_name, 0)
+                    
+                    qa_report[task_name][step_num]['forward_dynamics'] = forward_count
+                    qa_report[task_name][step_num]['inverse_dynamics'] = inverse_count
+                    qa_report[task_name][step_num]['total'] = forward_count + inverse_count
+                
+                # Calculate totals for this step
+                step_forward_total = sum(forward_stats.values())
+                step_inverse_total = sum(inverse_stats.values())
+                step_total = step_forward_total + step_inverse_total
+                
+                print(f"📊 Step {step_num} Summary: Forward={step_forward_total}, Inverse={step_inverse_total}, Total={step_total}")
             
-            # Save results to JSONL
-            manager.save_to_jsonl(str(self.output_file))
+            # Print final summary and report
+            print(f"\n🎉 BATCH QA GENERATION COMPLETE!")
+            print("=" * 60)
+            print(f"📊 FINAL QA GENERATION REPORT:")
+            print("=" * 60)
             
-            print(f"\n📈 BATCH QA GENERATION SUMMARY:")
-            print("=" * 40)
-            print(f"⏭️ Forward Dynamics Q&A pairs: {len(forward_qa_pairs)}")
-            print(f"⏪ Inverse Dynamics Q&A pairs: {len(inverse_qa_pairs)}")
-            print(f"⏭️ Multi-Step Forward Dynamics Q&A pairs: {len(multi_forward_qa_pairs)}")
-            print(f"⏪ Multi-Step Inverse Dynamics Q&A pairs: {len(multi_inv_qa_pairs)}")
-            print(f"📊 Total Q&A pairs: {len(all_qa_pairs)}")
-            print(f"💾 Output saved to: {self.output_file}")
+            # Calculate overall totals
+            overall_forward = 0
+            overall_inverse = 0
+            overall_total = 0
+            
+            # Print summary by step
+            for step_num in step_numbers:
+                step_forward = sum(qa_report[task_name][step_num]['forward_dynamics'] for task_name in task_names)
+                step_inverse = sum(qa_report[task_name][step_num]['inverse_dynamics'] for task_name in task_names)
+                step_total = step_forward + step_inverse
+                
+                overall_forward += step_forward
+                overall_inverse += step_inverse
+                overall_total += step_total
+                
+                print(f"Step {step_num:2d}: Forward={step_forward:4d}, Inverse={step_inverse:4d}, Total={step_total:4d}")
+            
+            print("-" * 60)
+            print(f"OVERALL: Forward={overall_forward:4d}, Inverse={overall_inverse:4d}, Total={overall_total:4d}")
+            print(f"💾 All QA pairs have been incrementally saved to: {self.output_file}")
+            print("🚀 Memory usage optimized by flushing after each task")
+            print("=" * 60)
+            
+            # Print the detailed report dictionary
+            print(f"\n📋 Detailed QA Report by Task and Step:")
+            print("Format: report[task_name][step_length][qa_type] = count")
+            print("-" * 60)
+            print(json.dumps(qa_report, indent=2))
             
         except Exception as e:
             print(f"❌ Error during QA generation: {e}")
@@ -147,21 +202,21 @@ def main():
     parser.add_argument(
         'input_root',
         nargs='?',
-        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/segmented_replayed_trajecotries',
+        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_Dataset/segmented_replayed_trajecotries',
         help='Root directory containing segmented task directories'
     )
     
     parser.add_argument(
         'raw_data_dir',
         nargs='?',
-        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/replayed_trajectories',
+        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_Dataset/replayed_trajectories',
         help='Root directory containing raw data'
     )
     
     parser.add_argument(
         'output_file',
         nargs='?',
-        default='/home/mll-laptop-1/01_projects/BEHAVIOR-1K/EmbodiedVLM/tmp/gen_qa_step_7.jsonl',
+        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_Dataset/QA/behavior_eqa_ordering.jsonl',
         help='Output JSONL file path'
     )
     
@@ -171,11 +226,35 @@ def main():
         help='Show what would be processed without actually generating QA pairs'
     )
     
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for reproducible results'
+    )
+    
+    parser.add_argument(
+        '--num-to-sample',
+        type=int,
+        default=25,
+        help='Number of sequences to sample for multi-step generators'
+    )
+    
+    parser.add_argument(
+        '--max-qa-num',
+        type=int,
+        default=20,
+        help='Maximum number of QA pairs to generate per task'
+    )
+    
     args = parser.parse_args()
     
     print(f"Input root: {args.input_root}")
     print(f"Raw data dir: {args.raw_data_dir}")
     print(f"Output file: {args.output_file}")
+    print(f"Seed: {args.seed}")
+    print(f"Num to sample: {args.num_to_sample}")
+    print(f"Max QA num: {args.max_qa_num}")
     
     if args.dry_run:
         print("\n[DRY RUN MODE] - No QA pairs will be generated")
@@ -191,7 +270,9 @@ def main():
         return
     
     try:
-        generator = BatchQAGenerator(args.input_root, args.output_file, args.raw_data_dir)
+        generator = BatchQAGenerator(args.input_root, args.output_file, args.raw_data_dir, seed=args.seed, num_to_sample=args.num_to_sample, max_qa_num=args.max_qa_num)
+        print(f"🎯 Using random seed: {args.seed} for reproducible results")
+        print(f"📊 Generation parameters: num_to_sample={args.num_to_sample}, max_qa_num={args.max_qa_num}")
         generator.run()
         print("\n🎉 Batch QA generation complete!")
     except Exception as e:

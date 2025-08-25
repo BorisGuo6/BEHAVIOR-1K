@@ -8,32 +8,29 @@ This module implements the InverseDynamicsGenerator class that generates
 import sys
 import os
 import random
+import copy
 from typing import Dict, List, Any, Tuple, Set
 from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 # Add PIL imports for image processing
 from PIL import Image, ImageDraw, ImageFont
-
+import hashlib
 # Add parent directories to path for relative imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(current_dir, '..', '..')
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'OmniGibson'))
 
 try:
     from EmbodiedVLM.utils.qa_gen_utils import TaskData, QAPair, AbstractQAGenerator
     from EmbodiedVLM.utils.state_change_translator import StateChangeTranslator
-    from EmbodiedVLM.utils.qa_prompt_template import inv_prompt, multi_inv_prompt
-    from omnigibson.utils.scene_graph_utils import SceneGraphReader
+    from EmbodiedVLM.utils.qa_prompt_template import inv_prompt, multi_inv_prompt, multi_inv_ordering_prompt
+    from EmbodiedVLM.utils.scene_graph_utils import SceneGraphReader
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-# Set random seeds for reproducibility
-random.seed(42)
-np.random.seed(42)
-
+# Random seeds are now set per-task in the generate() methods for deterministic behavior
 
 class InverseDynamicsGenerator(AbstractQAGenerator):
     """
@@ -49,9 +46,7 @@ class InverseDynamicsGenerator(AbstractQAGenerator):
         Args:
             qa_gen_logic: Optional logic specification (reserved for future use)
         """
-        # Set seeds for reproducibility at initialization
-        random.seed(42)
-        np.random.seed(42)
+        # Note: Seeds are set in the generate method for each task, not here
         
         self.translator = StateChangeTranslator(type="inverse_dynamics")
         self.qa_gen_logic = qa_gen_logic
@@ -82,6 +77,10 @@ class InverseDynamicsGenerator(AbstractQAGenerator):
         Returns:
             List[QAPair]: Generated Q&A pairs
         """
+        # Reset random seeds for deterministic behavior within this task
+        random.seed(42)
+        np.random.seed(42)
+        
         qa_pairs = []
         key_frame_ids = task_data.key_frame_ids
 
@@ -519,29 +518,32 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
     Multi-Step Inverse Dynamics: Given a sequence of states [S0, S1, ..., Sn], what sequence of actions happened?
     """
 
-    def __init__(self, qa_gen_logic: str = None, visual_prompt: bool = True, step_length: int = 5, option_num: int = 4):
+    def __init__(self, qa_gen_logic: str = "multi-choice", visual_prompt: bool = True, step_length: int = 5, option_num: int = 4):
         """
         Initialize the multi-step inverse dynamics generator.
         """
-        # Set seeds for reproducibility at initialization
-        random.seed(42)
-        np.random.seed(42)
+        # Note: Seeds are set in the generate method for each task, not here
         
         self.translator = StateChangeTranslator(type="multi_inverse_dynamics")
         self.qa_gen_logic = qa_gen_logic
         self.visual_prompt = visual_prompt
         self.step_length = step_length
-        assert 2 <= self.step_length <= 10, "Step length for inverse dynamics should be between 2 and 10."
+        assert 2 <= self.step_length <= 30, "Step length for inverse dynamics should be between 2 and 30."
         self.sensor_names = ["external_sensor1"]
         self.option_num = option_num
         assert self.option_num >= 4, f"Option number should be at least 4. Got {self.option_num} instead."
 
     @property
     def qa_type(self) -> str:
-        return f"multi_inverse_dynamics_{self.step_length}"
+        if self.qa_gen_logic == "ordering":
+            return f"inverse_dynamics_ordering_{self.step_length}_steps"
+        elif self.qa_gen_logic == "multi-choice" or self.qa_gen_logic == None:
+            return f"inverse_dynamics_option_{self.step_length}_steps_{self.option_num}_choices"
+        else:
+            raise ValueError(f"Invalid QA generation logic: {self.qa_gen_logic}")
 
     def visual_prompt_path(self, image_root_dir) -> str:
-        return image_root_dir / 'BehaviorEQA' / self.qa_type
+        return image_root_dir / 'QA' / 'images' / self.qa_type
         
     def _has_meaningful_changes(self, diff: Dict[str, Any]) -> bool:
         """
@@ -721,6 +723,18 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
             action_descriptions.append(action_desc)
         return action_descriptions
     
+    def _translate_diff_sequence_to_actions(self, task_data: TaskData, diff_sequence: List[Dict[str, Any]]) -> List[str]:
+        """
+        Translates a sequence of diffs into a list of action descriptions.
+        """
+        action_descriptions = []
+        for diff in diff_sequence:
+            action_desc = self.translator.translate_diff(diff)
+            if not action_desc:
+                action_desc = "No meaningful change is observed."
+            action_descriptions.append(action_desc)
+        return action_descriptions
+    
     def _validate_not_all_subsets(self, task_data: TaskData, grounded_seq: List[str], candidate_seq: List[str]) -> bool:
         """
         Validate that subset of candidate_seq exists in grounded_seq.
@@ -755,7 +769,7 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
         
         return not all_subsets
 
-    def _generate_distractor_action_sequences(
+    def _generate_distractor_action_sequences_old(
         self,
         correct_action_sequence: List[str],
         correct_frame_sequence: List[str],
@@ -895,6 +909,236 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
 
         return distractors
     
+    def _swap_one_state_between_two_diffs(
+        self,
+        diff_1: Dict[str, Any],
+        diff_2: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Swaps one state between two diffs.
+        
+        Args:
+            diff_1: First diff dictionary
+            diff_2: Second diff dictionary
+            
+        Returns:
+            Tuple of modified diffs with one state swapped between them
+        """
+        def collect_states(diff):
+            """Collect all states with their location info (type, operation, index, dict)"""
+            states = []
+            for operation in ['add', 'remove']:
+                if operation in diff:
+                    for i, node in enumerate(diff[operation].get('nodes', [])):
+                        states.append(('node', operation, i, node))
+                    for i, edge in enumerate(diff[operation].get('edges', [])):
+                        states.append(('edge', operation, i, edge))
+            return states
+        
+        states_1 = collect_states(diff_1)
+        states_2 = collect_states(diff_2)
+        
+        if not states_1 or not states_2:
+            return None, None
+        
+        # Randomly select different states for swapping, try at most 100 times
+        for _ in range(100):
+            state_1 = random.choice(states_1)
+            state_2 = random.choice(states_2)
+            
+            # Ensure the selected states are different
+            if state_1[3] != state_2[3]:  # Different content
+                break
+        else:
+            return None, None  # Can't find different states
+        
+        # Create new diffs and perform the swap
+        new_diff_1 = copy.deepcopy(diff_1)
+        new_diff_2 = copy.deepcopy(diff_2)
+        
+        # Unpack state information
+        type_1, op_1, idx_1, dict_1 = state_1
+        type_2, op_2, idx_2, dict_2 = state_2
+        
+        # Remove states from their original locations
+        if type_1 == 'node':
+            new_diff_1[op_1]['nodes'].pop(idx_1)
+        else:
+            new_diff_1[op_1]['edges'].pop(idx_1)
+            
+        if type_2 == 'node':
+            new_diff_2[op_2]['nodes'].pop(idx_2)
+        else:
+            new_diff_2[op_2]['edges'].pop(idx_2)
+        
+        # Place states in correct locations based on their type
+        # Place dict_2 (from diff_2) into diff_1 in the correct type list
+        if type_2 == 'node':
+            new_diff_1[op_1]['nodes'].append(dict_2)
+        else:
+            new_diff_1[op_1]['edges'].append(dict_2)
+            
+        # Place dict_1 (from diff_1) into diff_2 in the correct type list  
+        if type_1 == 'node':
+            new_diff_2[op_2]['nodes'].append(dict_1)
+        else:
+            new_diff_2[op_2]['edges'].append(dict_1)
+        
+        return new_diff_1, new_diff_2
+    
+    def _are_different_diffs(
+        self,
+        task_data: TaskData,
+        diff_sequence_1: List[Dict[str, Any]],
+        diff_sequence_2: List[Dict[str, Any]]
+    ) -> bool:
+        """
+        Checks if the diffs in diff_sequence_1 are different from the diffs in diff_sequence_2.
+        """
+        for idx_1 in range(len(diff_sequence_1)):
+            if task_data.scene_graph_reader.diff_signature(diff_sequence_1[idx_1]) != task_data.scene_graph_reader.diff_signature(diff_sequence_2[idx_1]):
+                return True
+        return False
+    
+    def _does_not_contain_diff_sequence(
+        self,
+        task_data: TaskData,
+        diff_seq_to_check: List[Dict[str, Any]],
+        diff_seq_sequence: List[List[Dict[str, Any]]]
+    ) -> bool:
+        """
+        Checks if diff_seq_to_check is not a subset of any diff_seq in diff_seq_sequence.
+        """
+        if len(diff_seq_sequence) == 0:
+            return True
+        
+        for diff_seq in diff_seq_sequence:
+            if self._are_different_diffs(task_data, diff_seq_to_check, diff_seq):
+                return True
+        return False
+                
+    
+    def _generate_distractor_action_sequences(
+        self,
+        correct_frame_sequence: List[str],
+        all_valid_sequences: List[List[str]],
+        task_data: TaskData
+    ) -> List[List[str]]:
+        """
+        Generates distractor action sequences based on the defined heuristics.
+        """
+        distractors = []
+
+        correct_diff_sequence = []
+
+        for i in range(len(correct_frame_sequence) - 1):
+            frame_a_id = correct_frame_sequence[i]
+            frame_b_id = correct_frame_sequence[i+1]
+            diff = task_data.scene_graph_reader.get_visible_full_diff(frame_a_id, frame_b_id, self.sensor_names, partial_diff=True)
+            correct_diff_sequence.append(diff)
+
+        # Heuristic 3: Replace with one unchanged state
+        if len(distractors) < self.option_num - 1:
+            searched_num = (self.option_num - 1) // 3 * 3
+            cur_num = 0
+            attempts = 0
+            max_attempts = searched_num * 10
+
+            while cur_num < searched_num and attempts < max_attempts:
+                attempts += 1
+
+                # Choose a random step to replace
+                step_to_replace = random.randint(0, len(correct_diff_sequence) - 1)
+                diff_to_replace = correct_diff_sequence[step_to_replace]
+                frame_a_id = correct_frame_sequence[step_to_replace]
+                frame_b_id = correct_frame_sequence[step_to_replace+1]
+
+                unchanged_states = task_data.scene_graph_reader.get_unchanged_states(frame_a_id, frame_b_id, self.sensor_names)
+                fake_diff = self._get_fake_state_centric_diff(unchanged_states)
+                if not fake_diff:
+                    continue
+
+                new_diff, _ = self._swap_one_state_between_two_diffs(diff_to_replace, fake_diff)
+
+                distracted_diff_sequence = copy.deepcopy(correct_diff_sequence)
+                distracted_diff_sequence[step_to_replace] = new_diff
+
+                if self._does_not_contain_diff_sequence(task_data, distracted_diff_sequence, distractors):
+                    distractors.append(distracted_diff_sequence)
+                    cur_num += 1
+                else:
+                    continue
+
+        # Heuristic 1: Select part of state and shuffle it
+        if len(distractors) < self.option_num - 1:
+            searched_num = (self.option_num - 1) // 3 
+            cur_num = 0
+            attempts = 0
+            max_attempts = searched_num * 10
+
+            while cur_num < searched_num and attempts < max_attempts:
+                attempts += 1
+
+                # Create a copy and swap only a pair of actions
+                if len(correct_diff_sequence) >= 2:
+                    # Pick two different random indices to swap
+                    idx1, idx2 = random.sample(range(len(correct_diff_sequence)), 2)
+                    diff_1 = correct_diff_sequence[idx1]
+                    diff_2 = correct_diff_sequence[idx2]
+                    
+                    new_diff_1, new_diff_2 = self._swap_one_state_between_two_diffs(diff_1, diff_2)
+                    if new_diff_1 and new_diff_2:
+                        distracted_diff_sequence = copy.deepcopy(correct_diff_sequence)
+                        distracted_diff_sequence[idx1] = new_diff_1
+                        distracted_diff_sequence[idx2] = new_diff_2
+
+                        if self._does_not_contain_diff_sequence(task_data, distracted_diff_sequence, distractors):
+                            distractors.append(distracted_diff_sequence)
+                            cur_num += 1
+                        else:
+                            continue
+                else:
+                    continue
+
+        # Heuristic 2: Select part of state and negate it
+        if len(distractors) < self.option_num - 1:
+            searched_num = (self.option_num - 1) // 3
+            cur_num = 0
+            attempts = 0
+            max_attempts = searched_num * 10
+
+            while cur_num < searched_num and attempts < max_attempts:
+                attempts += 1
+                
+                # Choose a random step to negate
+                step_to_negate = random.randint(0, len(correct_diff_sequence) - 1)
+                diff_to_negate = correct_diff_sequence[step_to_negate]
+
+                negated_diff = self._negate_part_of_diff(diff_to_negate)
+
+                distracted_diff_sequence = copy.deepcopy(correct_diff_sequence)
+                distracted_diff_sequence[step_to_negate] = negated_diff
+
+                if self._does_not_contain_diff_sequence(task_data, distracted_diff_sequence, distractors):
+                    distractors.append(distracted_diff_sequence)
+                    cur_num += 1
+                else:
+                    continue
+        
+
+        # Translate current distractors to action sequences
+        distractors = [self._translate_diff_sequence_to_actions(task_data, distractor) for distractor in distractors]
+
+        # Heuristic 4: Globally Incorrect Sequence (Fallback)
+        candidate_pool = [seq for seq in all_valid_sequences if seq != correct_frame_sequence]
+        random.shuffle(candidate_pool)
+        while len(distractors) < self.option_num - 1 and candidate_pool:
+            distractor_frame_seq = candidate_pool.pop()
+            distractor_action_seq = self._translate_sequence_to_actions(task_data, distractor_frame_seq)
+            if distractor_action_seq and distractor_action_seq not in distractors:
+                distractors.append(distractor_action_seq)
+        return distractors[:self.option_num - 1]
+    
     def _draw_text_on_image(self, image: Image.Image, text: str) -> Image.Image:
         """Helper function to draw a styled label onto a PIL Image object."""
         draw = ImageDraw.Draw(image)
@@ -1002,7 +1246,7 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
         
         # 2. Generate distractor action sequences
         distractor_sequences = self._generate_distractor_action_sequences(
-            correct_action_sequence, correct_frame_sequence, all_valid_sequences, task_data
+            correct_frame_sequence, all_valid_sequences, task_data
         )
         if len(distractor_sequences) < self.option_num - 1:
             return None
@@ -1043,7 +1287,9 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
             id=qa_id,
             images=final_input_image, # This is a list with one path to the filmstrip
             question=question,
-            meta_info=[self.option_num],
+            task_name=task_data.task_name,
+            key_frame_ids=correct_frame_sequence,
+            # meta_info=[self.option_num],
             gt_answer=gt_answer
         )
         return qa_pair
@@ -1051,29 +1297,39 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
     # You will need to add _negate_part_of_diff from InverseDynamicsGenerator here as well
     def _negate_part_of_diff(self, diff: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Negate part of the diff. (Copied from InverseDynamicsGenerator)
+        Negate part of the diff by randomly selecting one state to negate.
         """
-        # ... (implementation from InverseDynamicsGenerator)
         assert 'add' in diff and 'remove' in diff, f"Diff must contain both add and remove operations: {diff}"
-        negated_diff = {'add': {'nodes': [], 'edges': []}, 'remove': {'nodes': [], 'edges': []}}
-        negated = False
+        
+        # Collect all available states with their location info
+        available_states = []
         for operation in ['add', 'remove']:
-            the_other_operation = 'add' if operation == 'remove' else 'remove'
             if operation in diff:
-                for node in diff[operation].get('nodes', []):
-                    if random.random() < 0.5:
-                        negated_diff[the_other_operation]['nodes'].append(node)
-                        negated = True
-                    else:
-                        negated_diff[operation]['nodes'].append(node)
-                for edge in diff[operation].get('edges', []):
-                    if random.random() < 0.5:
-                        negated_diff[the_other_operation]['edges'].append(edge)
-                        negated = True
-                    else:
-                        negated_diff[operation]['edges'].append(edge)
-        if not negated and ('add' in diff or 'remove' in diff):
-            return {'add': diff.get('remove', {'nodes': [], 'edges': []}), 'remove': diff.get('add', {'nodes': [], 'edges': []})}
+                for i, node in enumerate(diff[operation].get('nodes', [])):
+                    available_states.append(('node', operation, i))
+                for i, edge in enumerate(diff[operation].get('edges', [])):
+                    available_states.append(('edge', operation, i))
+        
+        if not available_states:
+            return diff  # No states to negate, return original diff
+        
+        # Randomly select one state to negate
+        state_type, operation, index = random.choice(available_states)
+        the_other_operation = 'add' if operation == 'remove' else 'remove'
+        
+        # Create a deep copy of the original diff
+        negated_diff = copy.deepcopy(diff)
+        
+        # Move the selected state from its current operation to the opposite operation
+        if state_type == 'node':
+            # Remove from current operation and add to opposite operation
+            moved_node = negated_diff[operation]['nodes'].pop(index)
+            negated_diff[the_other_operation]['nodes'].append(moved_node)
+        else:  # edge
+            # Remove from current operation and add to opposite operation
+            moved_edge = negated_diff[operation]['edges'].pop(index)
+            negated_diff[the_other_operation]['edges'].append(moved_edge)
+        
         return negated_diff
 
     def _get_fake_state_centric_diff(self, raw_graph: Dict[str, Any]) -> Dict[str, Any]:
@@ -1107,10 +1363,15 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
     
         return diff
 
-    def generate(self, task_data: TaskData, num_to_sample: int=1000) -> List[QAPair]:
+    def generate(self, task_data: TaskData, num_to_sample: int=30, max_qa_num: int=25) -> List[QAPair]:
         """
         Generates multi-step inverse dynamics QA pairs.
         """
+        # Reset random seeds for deterministic behavior within this task
+        random.seed(42)
+        np.random.seed(42)
+        
+        mode = self.qa_gen_logic if self.qa_gen_logic else "multi-choice"
         key_frame_ids = sorted(task_data.key_frame_ids, key=int)
         if len(key_frame_ids) < self.step_length:
             return []
@@ -1130,22 +1391,180 @@ class MultiStepInverseDynamicsGenerator(AbstractQAGenerator):
             actual_num_to_sample, graph, dp_table, key_frame_ids
         )
         print(f"\nSuccessfully sampled {len(all_valid_sequences)} representative sequences.")
+
         
         # >>> NEW PART: Generate QA pairs from sampled sequences <<<
         qa_pairs = []
         print(f"Phase 4: Generating QA pairs from {len(all_valid_sequences)} sequences...")
-        for seq in tqdm(all_valid_sequences, desc="Generating Q&A"):
-            try:
-                qa_pair = self._create_multistep_inverse_qa_pair(
-                    task_data, seq, all_valid_sequences
-                )
-                if qa_pair:
-                    qa_pairs.append(qa_pair)
-            except Exception as e:
-                import traceback
-                print(f"Error generating QA for sequence {seq}: {e}")
-                traceback.print_exc()
-                continue
+        if mode == "multi-choice":
+            for seq in tqdm(all_valid_sequences, desc="Generating Q&A"):
+                try:
+                    qa_pair = self._create_multistep_inverse_qa_pair(
+                        task_data, seq, all_valid_sequences
+                    )
+                    if qa_pair:
+                        qa_pairs.append(qa_pair)
+                except Exception as e:
+                    import traceback
+                    print(f"Error generating QA for sequence {seq}: {e}")
+                    traceback.print_exc()
+                    continue
+        elif mode == "ordering":
+            for seq in tqdm(all_valid_sequences, desc="Generating Ordering QA Pairs"):
+                try:
+                    qa_pair = self._create_ordering_qa_pair(task_data, seq)
+                    if qa_pair:
+                        qa_pairs.append(qa_pair)
+                except Exception as e:
+                    import traceback
+                    print(f"Error generating QA for sequence {seq}: {e}")
+                    traceback.print_exc()
+                    continue
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
         
         print(f"\nGenerated {len(qa_pairs)} multi-step inverse dynamics QA pairs.")
+        if max_qa_num:
+            print(f"Truncating to {max_qa_num} QA pairs.")
+            # do random sampling
+            qa_pairs = random.sample(qa_pairs, min(max_qa_num, len(qa_pairs)))
         return qa_pairs
+    
+    def _add_text_to_image(self, image_path: str, text: str, output_path: str) -> None:
+        """Helper function to add text label to an image and save it."""
+        try:
+            # Open the image
+            img = Image.open(image_path)
+            
+            # Create a drawing context
+            draw = ImageDraw.Draw(img)
+            
+            # Setup font - make it larger for better visibility
+            font_size = max(40, img.height // 10)  # Increased font size (was img.height // 20)
+            try:
+                # Try to use a standard font
+                font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", font_size)
+            except (OSError, IOError):
+                try:
+                    # Fallback to DejaVu font
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                except (OSError, IOError):
+                    # Use default font if no system fonts available
+                    font = ImageFont.load_default()
+            
+            # Text styling - changed to bright red text with white outline
+            text_color = (255, 20, 20)   # Bright red text (was white)
+            outline_color = (255, 255, 255)  # White outline (was black)
+            outline_width = 3  # Slightly thicker outline
+            
+            # Position text at top-left corner with some padding
+            x, y = 15, 15  # Slightly more padding
+            
+            # Draw text with outline for better visibility
+            for dx in range(-outline_width, outline_width + 1):
+                for dy in range(-outline_width, outline_width + 1):
+                    if dx != 0 or dy != 0:
+                        draw.text((x + dx, y + dy), text, font=font, fill=outline_color)
+            
+            # Draw the main text
+            draw.text((x, y), text, font=font, fill=text_color)
+            
+            # Save the processed image
+            img.save(output_path)
+            
+        except Exception as e:
+            print(f"Error processing image {image_path}: {e}")
+            # If processing fails, copy the original image
+            import shutil
+            shutil.copy2(image_path, output_path)
+
+    def generate_qa_id_hash(self, task_name: str, qa_type: str, sequence: List[str]) -> str:
+        """
+        Generate a hash for a QA pair ID.
+        """
+        sequence_str = '_'.join(sequence)
+        sequence_hash = hashlib.sha256(sequence_str.encode()).hexdigest()[:8]
+        return f"{task_name}_{qa_type}_{sequence_hash}"
+    
+    def _create_ordering_qa_pair(
+        self,
+        task_data: TaskData,
+        correct_sequence: List[str]
+    ) -> QAPair:
+        """
+        Creates a full QA pair for a multi-step inverse dynamics ordering question.
+        """
+        assert len(correct_sequence) > 2, "Correct sequence must be at least 3 frames long"
+
+        qa_id = self.generate_qa_id_hash(task_data.task_name, self.qa_type, correct_sequence)
+        sensor_name = self.sensor_names[0]
+        image_paths = [task_data.image_paths[frame_id][sensor_name] for frame_id in correct_sequence]
+
+        next_states = correct_sequence[1:]
+
+        # final_input_image = image_paths # Default if not using visual prompts
+        # if self.visual_prompt:
+        #     final_input_image = [self._create_visual_prompt_for_filmstrip(qa_id, image_paths, task_data)]
+
+        
+        start_image_path = image_paths[0]
+        next_state_image_paths = image_paths[1:]
+
+        final_start_image = start_image_path
+        final_next_state_images = []
+        if self.visual_prompt:
+            image_root_dir = task_data.image_root_path.parent
+            new_base_dir = self.visual_prompt_path(image_root_dir)
+            output_dir = Path(new_base_dir) / task_data.task_name
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            cur_state_output_path = output_dir / f"{qa_id}_cur_state.png"
+            self._add_text_to_image(start_image_path, "Current State", str(cur_state_output_path))
+            final_start_image = str(cur_state_output_path)
+
+            for i, frame_id in enumerate(next_states):
+                next_state_image_path = task_data.image_paths[frame_id][sensor_name]
+                label = f"Next State {i+1}"
+                next_state_output_path = output_dir / f"{qa_id}_next_state_{i+1}.png"
+                self._add_text_to_image(next_state_image_path, label, str(next_state_output_path))
+                final_next_state_images.append(str(next_state_output_path))
+        else:
+            for frame_id in next_states:
+                image_path = task_data.image_paths[frame_id][sensor_name]
+                final_next_state_images.append(image_path)
+
+        all_images = [final_start_image] + final_next_state_images
+        all_images = [str(Path(image_path).relative_to(image_root_dir)) for image_path in all_images]
+        
+        correct_action_sequence = self._translate_sequence_to_actions(task_data, correct_sequence)
+        correct_order = []
+
+        shuffled_action_sequence = correct_action_sequence[:]
+        random.shuffle(shuffled_action_sequence)
+
+        # find the correct order of actions
+        for original_action in correct_action_sequence:
+            shuffled_position = shuffled_action_sequence.index(original_action) + 1
+            correct_order.append(shuffled_position)
+
+        # Attach [Action i] to each shuffled action
+        numbered_shuffled_actions = [f"[Action {i+1}] {action}" for i, action in enumerate(shuffled_action_sequence)]
+
+        numbered_action = '\n'.join(numbered_shuffled_actions)
+        question = multi_inv_ordering_prompt.format(SHUFFLED_ACTIONS=numbered_action)
+
+        gt_answer = {
+            "type": self.qa_type,
+            "options": [],
+            "correct_option": correct_order,
+        }
+
+        qa_pair = QAPair(
+            id=qa_id,
+            images=all_images,
+            task_name=task_data.task_name,
+            key_frame_ids=correct_sequence,
+            question=question,
+            gt_answer=gt_answer
+        )
+        return qa_pair

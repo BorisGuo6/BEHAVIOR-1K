@@ -9,21 +9,22 @@ world modeling capabilities.
 import sys
 import os
 import json
+import random
 from typing import Dict, List, Tuple
 from pathlib import Path
-
+from tqdm import tqdm
+import numpy as np
 # Add parent directories to path for relative imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(current_dir, '..', '..')
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'OmniGibson'))
 
 
 try:
     from EmbodiedVLM.utils.qa_gen_utils import TaskData, QAPair, AbstractQAGenerator
     from EmbodiedVLM.heuristics.forward_dynamics_generator import ForwardDynamicsGenerator, MultiStepForwardDynamicsGenerator
     from EmbodiedVLM.heuristics.inverse_dynamics_generator import InverseDynamicsGenerator, MultiStepInverseDynamicsGenerator
-    from omnigibson.utils.scene_graph_utils import SceneGraphReader
+    from EmbodiedVLM.utils.scene_graph_utils import SceneGraphReader
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
@@ -64,10 +65,10 @@ class QAGenerationManager:
         print(f"Loading segmented tasks from: {self.input_root_dir}")
         print(f"Loading raw data from: {self.raw_data_dir}")
         
-        for task_dir in self.input_root_dir.iterdir():
-            if not task_dir.is_dir():
-                continue
-                
+        # Sort task directories for deterministic processing order
+        task_dirs = sorted([d for d in self.input_root_dir.iterdir() if d.is_dir()])
+        
+        for task_dir in task_dirs:
             task_name = task_dir.name
             segmented_scene_graph_file = task_dir / "segmented_scene_graph_0.json" # get all key frame ids from this file
             raw_data_task_dir = self.raw_data_dir / task_name
@@ -157,17 +158,26 @@ class QAGenerationManager:
         
         return image_root_path, image_paths
 
-    def generate(self, qa_type: str, qa_gen_logic: str=None, step_length=None) -> List[QAPair]:
+    def generate(self, qa_type: str, qa_gen_logic: str=None, step_length=None, flush_to_file=None, seed: int=42, num_to_sample: int=30, max_qa_num: int=25) -> List[QAPair]:
         """
         Generate Q&A pairs of the specified type for all loaded tasks.
         
         Args:
             qa_type (str): Type of Q&A to generate (e.g., "forward_dynamics", "inverse_dynamics")
             qa_gen_logic (str): Optional logic specification for generation
+            step_length: Optional step length for multi-step generators
+            flush_to_file (str): If provided, flush QA pairs to this file after each task
+            seed (int): Random seed for reproducible results
+            num_to_sample (int): Number of sequences to sample for multi-step generators
+            max_qa_num (int): Maximum number of QA pairs to generate per task
             
         Returns:
-            List[QAPair]: All generated Q&A pairs
+            List[QAPair]: All generated Q&A pairs (empty if flushing to file)
         """
+        # Reset random seeds for deterministic behavior
+        random.seed(seed)
+        np.random.seed(seed)
+        print(f"Set random seeds to {seed} for deterministic QA generation")
         # Get the appropriate generator class
         generator_class = self._get_generator_class(qa_type)
         if generator_class is None:
@@ -180,27 +190,48 @@ class QAGenerationManager:
             generator = generator_class(qa_gen_logic)
         
         generated_pairs = []
+        task_stats = {}  # Track stats per task when flushing
         
         print(f"Generating {qa_type} Q&A pairs for {len(self.task_data_list)} tasks...")
         
         for task_data in self.task_data_list:
             try:
-                task_pairs = generator.generate(task_data)
-                generated_pairs.extend(task_pairs)
-                print(f"Generated {len(task_pairs)} Q&A pairs for task: {task_data.task_name}")
+                # Pass num_to_sample and max_qa_num for multi-step generators
+                if qa_type in ["multi_forward_dynamics", "multi_inverse_dynamics"]:
+                    task_pairs = generator.generate(task_data, num_to_sample=num_to_sample, max_qa_num=max_qa_num)
+                else:
+                    task_pairs = generator.generate(task_data)
+                
+                if flush_to_file:
+                    # Immediately flush task pairs to file and free memory
+                    self._append_to_jsonl(flush_to_file, task_pairs)
+                    task_stats[task_data.task_name] = len(task_pairs)
+                    print(f"Flushed {len(task_pairs)} Q&A pairs for task: {task_data.task_name}")
+                else:
+                    # Accumulate in memory (original behavior)
+                    generated_pairs.extend(task_pairs)
+                    print(f"Generated {len(task_pairs)} Q&A pairs for task: {task_data.task_name}")
+                    
             except Exception as e:
                 import traceback
                 print(f"Full traceback:")
                 traceback.print_exc()
                 print(f"Error generating Q&A for task {task_data.task_name}: {str(e)}")
+                if flush_to_file:
+                    task_stats[task_data.task_name] = 0
                 continue
         
-        # Store generated pairs
-        self.qa_pairs.extend(generated_pairs)
+        if not flush_to_file:
+            # Store generated pairs only if not flushing
+            self.qa_pairs.extend(generated_pairs)
         
-        print(f"Total generated Q&A pairs: {len(generated_pairs)}")
+        total_pairs = len(generated_pairs) if not flush_to_file else sum(task_stats.values())
+        print(f"Total generated Q&A pairs: {total_pairs}")
+        
+        # Return stats when flushing, otherwise return QA pairs
+        if flush_to_file:
+            return task_stats
         return generated_pairs
-
     def _get_generator_class(self, qa_type: str):
         """
         Get the generator class for the specified Q&A type.
@@ -218,22 +249,40 @@ class QAGenerationManager:
         else:
             return None
 
-    def save_to_jsonl(self, output_path: str):
+    def save_to_jsonl(self, output_path: str, append_mode: bool = False):
         """
         Save all generated Q&A pairs to a JSONL file.
         
         Args:
             output_path (str): Path to the output JSONL file
+            append_mode (bool): If True, append to existing file instead of overwriting
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(output_path, 'w', encoding='utf-8') as f:
+        mode = 'a' if append_mode else 'w'
+        with open(output_path, mode, encoding='utf-8') as f:
             for qa_pair in self.qa_pairs:
                 json.dump(qa_pair.to_dict(), f, ensure_ascii=False)
                 f.write('\n')
         
         print(f"Saved {len(self.qa_pairs)} Q&A pairs to: {output_path}")
+
+    def _append_to_jsonl(self, output_path: str, qa_pairs: List[QAPair]):
+        """
+        Append Q&A pairs to a JSONL file immediately.
+        
+        Args:
+            output_path (str): Path to the output JSONL file
+            qa_pairs (List[QAPair]): Q&A pairs to append
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'a', encoding='utf-8') as f:
+            for qa_pair in qa_pairs:
+                json.dump(qa_pair.to_dict(), f, ensure_ascii=False)
+                f.write('\n')
 
     def clear_qa_pairs(self):
         """Clear all stored Q&A pairs."""

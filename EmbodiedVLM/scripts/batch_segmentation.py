@@ -199,14 +199,14 @@ def main():
     parser.add_argument(
         'input_root',
         nargs='?',
-        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/replayed_trajectories',
+        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_Dataset/replayed_trajectories',
         help='Root directory containing task directories'
     )
     
     parser.add_argument(
         'output_root', 
         nargs='?',
-        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/segmented_replayed_trajecotries',
+        default='/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_Dataset/segmented_replayed_trajecotries',
         help='Root directory for output structure'
     )
     

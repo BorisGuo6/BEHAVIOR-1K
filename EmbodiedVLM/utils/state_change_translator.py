@@ -155,7 +155,7 @@ class StateChangeTranslator:
             node_parent = node_info['parent']
             from_parents = set()
             if node_parent == [] or node_parent == None:
-                descriptions.add(f"{node_name} is now added")
+                # descriptions.add(f"{node_name} is now added")
                 continue
             for parent in node_parent:
                 parent = self._format_object_name(parent)
@@ -171,9 +171,9 @@ class StateChangeTranslator:
                 descriptions.add(description)
             else:
                 if 'cooked' in node_name.lower():
-                    descriptions.add(f"{node_name.replace('cooked ', '')} is now cooked")
-                elif node_parent == [] or node_parent == None:
-                    descriptions.add(f"{node_name} is now added")
+                    descriptions.add(f"{node_name.replace('cooked', '')} is now cooked")
+                # elif node_parent == [] or node_parent == None:
+                #     descriptions.add(f"{node_name} is now added")
                 elif len(node_parent) == 1:
                     parent_name = self._format_object_name(node_parent[0])
                     descriptions.add(f"{parent_name} now becomes {node_name}")
@@ -183,7 +183,64 @@ class StateChangeTranslator:
         # for obj in not_mentioned_removed_objects:
         #     descriptions.append(f"{obj} is now removed.")
         return list(descriptions)
+    
+    def process_object_add_and_remove_into_signatures(
+        self,
+        diff: Dict[str, Any]
+    ) -> Set[str]:
+        """
+        Translate the object adding and removing into signatures.
+        """
+        signatures = set()
+        added_objects_dict = dict()
 
+        added_objects = set()
+        removed_objects = set()
+
+        mentioned_removed_objects = set()
+        for node in diff['add'].get('nodes', []):
+            node_name = self._format_object_name(node['name'])
+            if node['states'] == []:
+                added_objects.add(node_name)
+                added_objects_dict[node_name] = {
+                    'category': node['category'],
+                    'parent': node['parent']
+                }
+        for node in diff['remove'].get('nodes', []):
+            node_name = self._format_object_name(node['name'])
+            if node['states'] == []:
+                removed_objects.add(node_name)
+                
+        # we then do translation in terms of object addition
+        for node_name, node_info in added_objects_dict.items():
+            node_parent = node_info['parent']
+            from_parents = set()
+            if node_parent == [] or node_parent == None:
+                continue
+            for parent in node_parent:
+                parent = self._format_object_name(parent)
+                if parent in removed_objects:
+                    mentioned_removed_objects.add(parent)
+                    from_parents.add(parent)
+            
+            from_parents = list(from_parents)
+            if len(from_parents) == 1:
+                signatures.add(f"node_transition_from_{from_parents[0]}_to_{node_name}")
+            elif len(from_parents) > 1:
+                sorted_from_parents = sorted(from_parents)
+                signatures.add(f"node_transition_from_{'_'.join(sorted_from_parents)}_to_{node_name}")
+            else:
+                if 'cooked' in node_name.lower():
+                    signatures.add(f"node_transition_from_{node_name.replace('cooked ', '')}_to_cooked")
+                elif len(node_parent) == 1:
+                    parent_name = self._format_object_name(node_parent[0])
+                    signatures.add(f"node_transition_from_{parent_name}_to_{node_name}")
+                    
+        # we then do translation in terms of object removal
+        # for node_name in removed_objects:
+        #     signatures.add(f"node_remove_{node_name}")
+            
+        return signatures
     
     def translate_diff(self, diff: Dict[str, Any]) -> str:
         """
@@ -241,6 +298,30 @@ class StateChangeTranslator:
         elif self.mode == "multi_inverse_dynamics":
             descriptions = [desc.capitalize() for desc in descriptions]
             return ". ".join(descriptions) + "."
+        
+    def translate_diff_into_signatures(
+        self,
+        diff: Dict[str, Any]
+    ) -> Set[str]:
+        """
+        Translate a scene graph diff into a sequence of signatures.
+        """
+        signatures = set()
+        if diff.get('type') == 'empty':
+            return signatures
+        
+        for operation in ['add', 'remove']:
+            if operation in diff:
+                for node in diff[operation].get('nodes', []):
+                    signatures.update(self._translate_node_change_atomic_signature(operation, node))
+                for edge in diff[operation].get('edges', []):
+                    signatures.update(self._translate_edge_change_atomic_signature(operation, edge))
+
+        add_and_remove_signatures = self.process_object_add_and_remove_into_signatures(diff)
+        if add_and_remove_signatures:
+            signatures.update(add_and_remove_signatures)
+            
+        return signatures
             
     def _translate_node_change_atomic(self, operation: str, node: Dict[str, Any]) -> List[str]:
         """
@@ -278,6 +359,34 @@ class StateChangeTranslator:
         
         return state_descriptions
     
+    def _translate_node_change_atomic_signature(
+        self,
+        operation: str,
+        node: Dict[str, Any]
+    ) -> Set[str]:
+        """
+        Translate a node change into a signature.
+
+        Args:
+            operation: 'add' or 'remove'
+            node: Node data with 'name' and 'states'
+
+        Returns:
+            Set[str]: Set of signatures
+        """
+        object_name = self._format_object_name(node.get('name', ''))
+        states = node.get('states', [])
+        if not states:
+            return set()
+        
+        signatures = set()
+        for state in states:
+            if state in self._state_templates:
+                signature = f"node_{operation}_{object_name}_{state}"
+                signatures.add(signature)
+        
+        return signatures
+    
     def _translate_edge_change_atomic(self, operation: str, edge: Dict[str, Any]) -> List[str]:
         """
         Translate an edge change into atomic natural language descriptions.
@@ -307,6 +416,35 @@ class StateChangeTranslator:
                 relation_descriptions.append(desc)
         
         return relation_descriptions
+    
+    def _translate_edge_change_atomic_signature(
+        self,
+        operation: str,
+        edge: Dict[str, Any]
+    ) -> Set[str]:
+        """
+        Translate an edge change into a signature.
+
+        Args:
+            operation: 'add' or 'remove'
+            edge: Edge data with 'from', 'to', and 'states'
+
+        Returns:
+            Set[str]: Set of signatures
+        """
+        from_obj = self._format_object_name(edge.get('from', ''))
+        to_obj = self._format_object_name(edge.get('to', ''))
+        states = edge.get('states', [])
+        if not states or not from_obj or not to_obj:
+            return set()
+        
+        signatures = set()
+        for state in states:
+            if state in self._state_templates:
+                signature = f"edge_{operation}_{from_obj}_{to_obj}_{state}"
+                signatures.add(signature)
+        
+        return signatures
     
     def _format_object_name(self, name: str) -> str:
         """

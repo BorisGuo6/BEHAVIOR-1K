@@ -21,6 +21,7 @@ RUN_QA = False
 gm.RENDER_VIEWER_CAMERA = False
 gm.DEFAULT_VIEWER_WIDTH = 128
 gm.DEFAULT_VIEWER_HEIGHT = 128
+gm.HEADLESS = True
 
 
 def extract_arg_names(func):
@@ -33,7 +34,7 @@ def save_frame(args):
     filename = os.path.join(output_dir, f"{frame_id:05d}.png")
     cv2.imwrite(filename, frame)
 
-def decompose_video_parallel(video_path, output_folder, base_frame_id=0, chunk_size=600):
+def decompose_video_parallel(video_path, output_folder, base_frame_id=0, chunk_size=2100):
     '''Decompose a video into PNG frames using parallel processing with chunking to avoid memory issues'''
     if base_frame_id is None:
         base_frame_id = 0
@@ -283,20 +284,20 @@ def replay_hdf5_file(hdf_input_path):
     start_frame = None
     end_frame = None
 
-    for episode_id in range(env.input_hdf5["data"].attrs["n_episodes"]):
-        scene_graph_writer = SceneGraphWriter(output_path=os.path.join(folder_path, f"scene_graph_{episode_id}.json"), interval=200, buffer_size=200, write_full_graph_only=True)
-        env.playback_episode(
-            episode_id=episode_id,
-            record_data=False,
-            video_writers=video_writers,
-            video_rgb_keys=video_rgb_keys,
-            frame_writers=None,
-            frame_rgb_keys=None,
-            start_frame=start_frame,
-            end_frame=end_frame,
-            scene_graph_writer=scene_graph_writer,
-            replay_config=replay_config,
-        )
+    # for episode_id in range(env.input_hdf5["data"].attrs["n_episodes"]):
+    #     scene_graph_writer = SceneGraphWriter(output_path=os.path.join(folder_path, f"scene_graph_{episode_id}.json"), interval=200, buffer_size=200, write_full_graph_only=True)
+    #     env.playback_episode(
+    #         episode_id=episode_id,
+    #         record_data=False,
+    #         video_writers=video_writers,
+    #         video_rgb_keys=video_rgb_keys,
+    #         frame_writers=None,
+    #         frame_rgb_keys=None,
+    #         start_frame=start_frame,
+    #         end_frame=end_frame,
+    #         scene_graph_writer=scene_graph_writer,
+    #         replay_config=replay_config,
+    #     )
     # Close all video writers
     for writer in video_writers:
         writer.close()
@@ -322,7 +323,7 @@ def main():
     parser.add_argument("--dir", help="Directory containing HDF5 files to process")
     parser.add_argument("--files", nargs="*", help="Individual HDF5 file(s) to process")
 
-    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/sampled_demo/cleaning_up_plates_and_food_1747631958405370_cleaning_up_plates_and_food.hdf5"]
+    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/replayed_trajectories/cook_cabbage_1753781960466556.hdf5"]
     # default_dir = "/home/mll-laptop-1/01_projects/03_behavior_challenge/raw_demos/Jul_2_demos/cleaning_up_plates_and_food_1747365183765658_cleaning_up_plates_and_food.hdf5"
     
     args = parser.parse_args()

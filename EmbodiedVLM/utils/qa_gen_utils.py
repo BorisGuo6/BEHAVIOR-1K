@@ -10,10 +10,7 @@ from typing import Dict, List, Any, Union
 from dataclasses import dataclass
 from pathlib import Path
 
-# Add the parent directory to sys.path to import scene_graph_utils
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'OmniGibson'))
-
-from omnigibson.utils.scene_graph_utils import SceneGraphReader
+from EmbodiedVLM.utils.scene_graph_utils import SceneGraphReader
 
 
 @dataclass
@@ -46,20 +43,21 @@ class QAPair:
         images (List[str]): List of image paths involved in the question
         question (str): The question text (prompt for VLM)
         gt_answer (Any): Ground truth answer
-        meta_info (Any): Optional metadata (default: None)
     """
     id: str
+    task_name: str
+    key_frame_ids: List[str]
     images: List[str]
     question: str
     gt_answer: Any
-    meta_info: Any = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for serialization."""
         return {
             'id': self.id,
             'type': self.gt_answer['type'],
-            'meta_info': self.meta_info,
+            'task_name': self.task_name,
+            'key_frame_ids': self.key_frame_ids,
             'images': self.images,
             'question': self.question,
             'options': self.gt_answer['options'],

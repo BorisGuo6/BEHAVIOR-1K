@@ -19,10 +19,9 @@ from collections import defaultdict
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(current_dir, '..', '..')
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'OmniGibson'))
 
 try:
-    from omnigibson.utils.scene_graph_utils import SceneGraphReader
+    from EmbodiedVLM.utils.scene_graph_utils import SceneGraphReader
     from EmbodiedVLM.utils.frame_seg_utils import has_scene_graph_changes, only_contact_changes
 except ImportError as e:
     print(f"Import error: {e}")

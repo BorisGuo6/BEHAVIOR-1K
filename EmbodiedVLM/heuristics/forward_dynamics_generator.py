@@ -5,6 +5,7 @@ This module implements the ForwardDynamicsGenerator class that generates
 "given initial image and action description, what is the result?" type questions.
 """
 
+import itertools
 import sys
 import os
 import random
@@ -13,7 +14,7 @@ import numpy as np
 from typing import Dict, List, Any, Set, Tuple
 from pathlib import Path
 from tqdm import tqdm
-
+import hashlib
 # Add PIL imports for image processing
 from PIL import Image, ImageDraw, ImageFont
 
@@ -21,20 +22,18 @@ from PIL import Image, ImageDraw, ImageFont
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(current_dir, '..', '..')
 sys.path.insert(0, project_root)
-sys.path.insert(0, os.path.join(project_root, 'OmniGibson'))
 
 try:
     from EmbodiedVLM.utils.qa_gen_utils import TaskData, QAPair, AbstractQAGenerator
-    from EmbodiedVLM.utils.qa_prompt_template import fwd_prompt, multi_fwd_prompt
+    from EmbodiedVLM.utils.qa_prompt_template import fwd_prompt, multi_fwd_prompt, multi_fwd_ordering_prompt, multi_inv_ordering_prompt
     from EmbodiedVLM.utils.state_change_translator import StateChangeTranslator
-    from omnigibson.utils.scene_graph_utils import SceneGraphReader
+    from EmbodiedVLM.utils.scene_graph_utils import SceneGraphReader
 except ImportError as e:
     print(f"Import error: {e}")
     sys.exit(1)
 
-# Set random seeds for reproducibility
-random.seed(42)
-np.random.seed(42)
+# Random seeds are now set per-task in the generate() methods for deterministic behavior
+
 
 class ForwardDynamicsGenerator(AbstractQAGenerator):
     """
@@ -50,9 +49,7 @@ class ForwardDynamicsGenerator(AbstractQAGenerator):
         Args:
             qa_gen_logic: Optional logic specification (reserved for future use)
         """
-        # Set seeds for reproducibility at initialization
-        random.seed(42)
-        np.random.seed(42)
+        # Note: Seeds are set in the generate method for each task, not here
         
         self.translator = StateChangeTranslator(type="forward_dynamics")
         self.qa_gen_logic = qa_gen_logic
@@ -73,7 +70,6 @@ class ForwardDynamicsGenerator(AbstractQAGenerator):
         # replace the image root path last folder with 'QA_images'
         return image_root_dir / 'BehaviorEQA' / self.qa_type
     
-
     def generate(self, task_data: TaskData) -> List[QAPair]:
         """
         Generate forward dynamics Q&A pairs for a task.
@@ -84,6 +80,10 @@ class ForwardDynamicsGenerator(AbstractQAGenerator):
         Returns:
             List[QAPair]: Generated Q&A pairs
         """
+        # Reset random seeds for deterministic behavior within this task
+        random.seed(42)
+        np.random.seed(42)
+        
         qa_pairs = []
         key_frame_ids = task_data.key_frame_ids
         
@@ -571,7 +571,6 @@ class ForwardDynamicsGenerator(AbstractQAGenerator):
 
         return distractors[:3]
 
-    
     def _generate_advanced_distractors(self, task_data: TaskData, correct_frame_a: str,
                                      ground_truth_diff: Dict[str, Any],
                                      available_frames: List[str], sensor_name: str) -> List[str]:
@@ -828,7 +827,7 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
     Multi-Step Forward Dynamics: Given the current state and a sequence of actions, what will be the next following states?
     """
 
-    def __init__(self, qa_gen_logic: str = None, visual_prompt: bool=True, step_length: int=5, option_num: int=4):
+    def __init__(self, qa_gen_logic: str = "multi-choice", visual_prompt: bool=True, step_length: int=5, option_num: int=4):
         """
         Initialize the forward dynamics generator.
 
@@ -845,15 +844,19 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         self.qa_gen_logic = qa_gen_logic
         self.visual_prompt = visual_prompt
         self.step_length = step_length
-        assert 2 <= self.step_length <= 10, f"Step length should be between 2 and 10. Got {self.step_length} instead."
+        assert 2 <= self.step_length <= 30, f"Step length should be between 2 and 30. Got {self.step_length} instead."
         self.sensor_names = ['external_sensor1']
         self.option_num = option_num
         assert self.option_num >= 4, f"Option number should be at least 4. Got {self.option_num} instead."
-
     
     @property
     def qa_type(self) -> str:
-        return f"multi_forward_dynamics_{self.step_length}" if self.step_length > 2 else "forward_dynamics"
+        if self.qa_gen_logic == "ordering":
+            return f"forward_dynamics_ordering_{self.step_length}_steps"
+        elif self.qa_gen_logic == "multi-choice" or self.qa_gen_logic == None:
+            return f"forward_dynamics_option_{self.step_length}_steps_{self.option_num}_choices"
+        else:
+            raise ValueError(f"Invalid QA generation logic: {self.qa_gen_logic}")
     
     def visual_prompt_path(self, image_root_dir) -> str:
         """
@@ -862,7 +865,7 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         Returns:
             str: Path to the visual prompt
         """
-        return image_root_dir / 'BehaviorEQA' / self.qa_type
+        return image_root_dir / 'QA' / 'images' / self.qa_type
     
     def _has_meaningful_changes(self, diff: Dict[str, Any]) -> bool:
         """
@@ -898,8 +901,6 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         Check if a transition from frame_a_id to frame_b_id is valid.
         Note: The memoization is now handled by the graph building process.
         """
-        if frame_a_id == '10894' and frame_b_id == '13946':
-            print(frame_a_id, frame_b_id)
         visible_diff = task_data.scene_graph_reader.get_visible_full_diff(
             frame_a_id, frame_b_id, self.sensor_names, partial_diff=True
         )
@@ -1027,7 +1028,7 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         return sampled_sequences
 
 
-    def generate(self, task_data: TaskData, num_to_sample: int=1000) -> List[QAPair]: # Should be List[QAPair]
+    def generate(self, task_data: TaskData, num_to_sample: int=30, max_qa_num: int=25) -> List[QAPair]: # Should be List[QAPair]
         """
         Generates all valid sequences of frames of length `self.step_length`.
 
@@ -1036,10 +1037,15 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
 
         Args:
             task_data: Task data containing scene graphs and images.
-
+            num_to_sample: Number of sequences to sample.
+            max_qa_num: Maximum number of QA pairs to generate.
         Returns:
             List[QAPair]: List of generated QA pairs.
         """
+        # Reset random seeds for deterministic behavior within this task
+        random.seed(42)
+        np.random.seed(42)
+        mode = self.qa_gen_logic if self.qa_gen_logic else "multi-choice"
         key_frame_ids = sorted(task_data.key_frame_ids, key=int)
         num_frames = len(key_frame_ids)
 
@@ -1070,27 +1076,159 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         
         qa_pairs = []
         print(f"Phase 4: Generating QA pairs from {len(all_valid_sequences)} sequences...")
-        for seq in tqdm(all_valid_sequences, desc="Generating Q&A"):
-            try:
-                # Generate distractors for the current correct sequence
-                distractor_sequences = self._generate_distractor_sequences(seq, all_valid_sequences, task_data)
-                
-                if len(distractor_sequences) < self.option_num - 1:
-                    continue
+        if mode == "multi-choice":
+            for seq in tqdm(all_valid_sequences, desc="Generating Q&A"):
+                try:
+                    # Generate distractors for the current correct sequence
+                    distractor_sequences = self._generate_distractor_sequences(
+                        seq, all_valid_sequences, task_data,
+                        graph=graph, dp_table=dp_table, key_frame_ids=key_frame_ids,
+                        frame_to_index=frame_to_index
+                    )
+                    
+                    if len(distractor_sequences) < self.option_num - 1:
+                        continue
 
-                # Create the QA pair
-                qa_pair = self._create_multistep_qa_pair(task_data, seq, distractor_sequences)
-                
-                if qa_pair:
-                    qa_pairs.append(qa_pair)
-            except Exception as e:
-                import traceback
-                print(f"Error generating QA for sequence {seq}: {e}")
-                traceback.print_exc() # Uncomment for detailed debugging
-                continue
+                    # Create the QA pair
+                    qa_pair = self._create_multistep_qa_pair(task_data, seq, distractor_sequences)
+                    
+                    if qa_pair:
+                        qa_pairs.append(qa_pair)
+                except Exception as e:
+                    import traceback
+                    print(f"Error generating QA for sequence {seq}: {e}")
+                    traceback.print_exc() # Uncomment for detailed debugging
+                    continue
+        elif mode == "ordering":
+            for seq in tqdm(all_valid_sequences, desc="Generating Ordering QA pairs"):
+                try:
+                    qa_pair = self._create_ordering_qa_pair(task_data, seq)
+                    if qa_pair:
+                        qa_pairs.append(qa_pair)
+                except Exception as e:
+                    import traceback
+                    print(f"Error generating QA for sequence {seq}: {e}")
+                    traceback.print_exc() # Uncomment for detailed debugging
+                    continue
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
 
         print(f"\nGenerated {len(qa_pairs)} multi-step forward dynamics QA pairs.")
+        if max_qa_num:
+            print(f"Truncating to {max_qa_num} QA pairs.")
+            # do random sampling
+            qa_pairs = random.sample(qa_pairs, min(max_qa_num, len(qa_pairs)))
         return qa_pairs
+    
+
+    def get_valid_path_num(self, task_data: TaskData, step_num: int) -> int:
+        """
+        Get the number of valid paths of a given length.
+        """
+        key_frame_ids = sorted(task_data.key_frame_ids, key=int)
+        graph = self._build_valid_transitions_graph(key_frame_ids, task_data)
+        frame_to_index = {frame_id: i for i, frame_id in enumerate(key_frame_ids)}
+        dp_table = self._count_paths_with_dp(graph, key_frame_ids, frame_to_index)
+        return dp_table[step_num - 1].sum()
+    
+    def generate_qa_id_hash(self, task_name: str, qa_type: str, sequence: List[str]) -> str:
+        """
+        Generate a hash for a QA pair ID.
+        """
+        sequence_str = '_'.join(sequence)
+        sequence_hash = hashlib.sha256(sequence_str.encode()).hexdigest()[:8]
+        return f"{task_name}_{qa_type}_{sequence_hash}"
+
+    def _create_ordering_qa_pair(
+            self, 
+            task_data: TaskData, 
+            correct_sequence: List[str]
+        ) -> QAPair:
+        """
+        Create a QA pair for the ordering task.
+        """
+        assert len(correct_sequence) > 2, "Correct sequence must be at least 3 frames long"
+
+        # 1. Get the initial state image
+        start_frame_id = correct_sequence[0]
+        sensor_name = self.sensor_names[0]
+        start_image_path = task_data.image_paths.get(start_frame_id, {}).get(sensor_name, None)
+        if not start_image_path:
+            return None
+        
+        # 2. Generate the question from the action sequence
+        action_descriptions = self._translate_sequence_to_actions(task_data, correct_sequence)
+        
+        # 3. Get the next states (excluding the initial state)
+        next_states = correct_sequence[1:]
+        
+        # 4. Create shuffled ordering and track the correct order
+        shuffled_next_states = next_states[:]
+        random.shuffle(shuffled_next_states)
+        
+        # 5. Find the correct order - map from shuffled positions to original positions
+        correct_order = []
+        for original_frame in next_states:
+            shuffled_position = shuffled_next_states.index(original_frame) + 1  # 1-indexed
+            correct_order.append(shuffled_position)
+        
+        # 6. Generate QA pair ID
+        qa_id = self.generate_qa_id_hash(task_data.task_name, self.qa_type, correct_sequence)
+        
+        # 7. Create visual prompts by reusing existing infrastructure
+        final_start_image = start_image_path
+        final_next_state_images = []
+        
+        if self.visual_prompt:
+            # Reuse existing visual prompt creation by adapting it for ordering
+            # We need individual labeled images, not filmstrips
+            image_root_dir = task_data.image_root_path.parent
+            new_base_dir = self.visual_prompt_path(image_root_dir)
+            output_dir = Path(new_base_dir) / task_data.task_name
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Process current state image using existing method
+            cur_state_output_path = output_dir / f"{qa_id}_cur_state.png"
+            self._add_text_to_image(start_image_path, "Current State", str(cur_state_output_path))
+            final_start_image = str(cur_state_output_path)
+            
+            # Process each shuffled next state image with sequential labels using existing method
+            for i, frame_id in enumerate(shuffled_next_states):
+                next_state_image_path = task_data.image_paths[frame_id][sensor_name]
+                label = f"Next State {i + 1}"
+                next_state_output_path = output_dir / f"{qa_id}_next_state_{i + 1}.png"
+                self._add_text_to_image(next_state_image_path, label, str(next_state_output_path))
+                final_next_state_images.append(str(next_state_output_path))
+        else:
+            # If no visual prompt, use original images
+            for frame_id in shuffled_next_states:
+                image_path = task_data.image_paths[frame_id][sensor_name]
+                final_next_state_images.append(image_path)
+        
+        # 8. Generate the question using the ordering prompt
+        question = multi_fwd_ordering_prompt.format(STATE_CHANGES=action_descriptions)
+        
+        # 9. Prepare all images (current state + shuffled next states)
+        all_images = [final_start_image] + final_next_state_images
+        # remove the root dir from the image paths
+        all_images = [str(Path(image_path).relative_to(image_root_dir)) for image_path in all_images]
+        # 10. Create the ground truth answer
+        gt_answer = {
+            "type": f"{self.qa_type}",
+            "options": [],
+            'correct_option': correct_order
+            # "shuffled_frames": shuffled_next_states,  # For debugging/reference
+        }        
+        qa_pair = QAPair(
+            id=qa_id,
+            images=all_images,
+            task_name=task_data.task_name,
+            key_frame_ids=correct_sequence,
+            question=question,
+            gt_answer=gt_answer
+        )
+        
+        return qa_pair
     
     def _validate_not_all_subsets(self, task_data: TaskData, grounded_seq: List[str], candidate_seq: List[str]) -> bool:
         """
@@ -1117,8 +1255,8 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
             if candidate_visible_diff.get('type') == 'empty':
                 return False
             
-            if task_data.scene_graph_reader.has_similar_edges(grounded_visible_diff, candidate_visible_diff, grounded_current_scene_graph, grounded_next_scene_graph, candidate_scene_graph):
-                return False
+            # if task_data.scene_graph_reader.has_similar_edges(grounded_visible_diff, candidate_visible_diff, grounded_current_scene_graph, grounded_next_scene_graph, candidate_scene_graph):
+            #     return False
             
             # check if grounded_visible_diff is a subset of candidate_visible_diff
             if not task_data.scene_graph_reader.is_diff_subset_scene(grounded_visible_diff, candidate_scene_graph) and not task_data.scene_graph_reader.is_diff_subset_scene(candidate_visible_diff, grounded_next_scene_graph):
@@ -1184,12 +1322,154 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         """
         similar_sequences = self._search_top_k_similar_sequences(correct_sequence, all_valid_sequences, len(all_valid_sequences))
         return similar_sequences
+    
+    def _generate_hard_negatives_by_modification(
+        self,
+        correct_sequence: List[str],
+        graph: Dict[str, List[str]],
+        dp_table: np.ndarray,
+        key_frame_ids: List[str],
+        frame_to_index: Dict[str, int],
+        num_to_generate: int,
+        task_data: TaskData
+    ) -> List[List[str]]:
+        """
+        Generates "hard negative" distractors with a complete 3-phase hybrid strategy.
+        This version ensures MAXIMUM DIVERSITY in fallback phases by first collecting all
+        possible valid swaps, shuffling them, and then selecting the required number.
+        """
+        k = self.step_length
+        generated_distractors: Set[tuple] = {tuple(correct_sequence)}
+        out: List[List[str]] = []
+        
+        max_diff = min(2, k // 4)
+        if max_diff <= 0 or num_to_generate == 0:
+            return []
+
+        # --- Phase 1: Randomized Search (Fastest method) ---
+        # This phase is inherently diverse and remains unchanged.
+        max_attempts = num_to_generate * 20
+        for _ in range(max_attempts):
+            if len(out) >= num_to_generate: break
+            
+            temp_sequence = list(correct_sequence)
+            num_swaps = random.randint(1, max_diff)
+            
+            if k < 3 or k - 2 < num_swaps: continue
+            
+            indices_to_modify = random.sample(range(1, k - 1), k=num_swaps)
+            
+            successful_modification = True
+            for i in indices_to_modify:
+                prev_frame = temp_sequence[i - 1]
+                next_frame = temp_sequence[i + 1]
+                candidates = [
+                    f for f in graph.get(prev_frame, [])
+                    if f != temp_sequence[i]
+                    and dp_table[i, frame_to_index[f]] > 0
+                    and next_frame in graph.get(f, [])
+                ]
+                if not candidates:
+                    successful_modification = False
+                    break
+                temp_sequence[i] = random.choice(candidates)
+
+            if successful_modification:
+                is_valid_path = all(b in graph.get(a, []) for a, b in zip(temp_sequence, temp_sequence[1:]))
+                if is_valid_path and self._validate_not_all_subsets(task_data, correct_sequence, temp_sequence):
+                    t_seq = tuple(temp_sequence)
+                    if t_seq not in generated_distractors:
+                        generated_distractors.add(t_seq)
+                        out.append(temp_sequence)
+
+        if len(out) >= num_to_generate:
+            return out[:num_to_generate]
+
+        # --- Phase 2: 1-Point Fallback (MAXIMUM DIVERSITY) ---
+        need = num_to_generate - len(out)
+        
+        # Step 1: Collect ALL possible and valid 1-point swaps
+        all_possible_1_swaps = []
+        for i in range(1, k - 1):
+            prev, orig, nxt = correct_sequence[i - 1], correct_sequence[i], correct_sequence[i + 1]
+            
+            if i > 0 and dp_table[i - 1, frame_to_index[prev]] == 0: continue
+            
+            possible_cands = [
+                f for f_idx, count in enumerate(dp_table[i])
+                if count > 0 and (f := key_frame_ids[f_idx]) != orig
+            ]
+            for cand in possible_cands:
+                if cand in graph.get(prev, []) and nxt in graph.get(cand, []):
+                    new_seq = correct_sequence[:i] + [cand] + correct_sequence[i + 1:]
+                    if self._validate_not_all_subsets(task_data, correct_sequence, new_seq):
+                        all_possible_1_swaps.append(new_seq)
+
+        # Step 2: Shuffle the collected pool
+        random.shuffle(all_possible_1_swaps)
+        
+        # Step 3: Add from the shuffled pool until `need` is met
+        for new_seq in all_possible_1_swaps:
+            if need <= 0: break
+            t_seq = tuple(new_seq)
+            if t_seq not in generated_distractors:
+                generated_distractors.add(t_seq)
+                out.append(new_seq)
+                need -= 1
+
+        if need <= 0 or max_diff < 2:
+            return out[:num_to_generate]
+
+        # --- Phase 3: 2-Point Fallback (MAXIMUM DIVERSITY) ---
+        if k < 4: return out[:num_to_generate]
+        
+        # Step 1: Collect ALL possible and valid 2-point swaps
+        all_possible_2_swaps = []
+        for i, j in itertools.combinations(range(1, k - 1), 2):
+            prev_i, orig_i = correct_sequence[i - 1], correct_sequence[i]
+            orig_j, next_j = correct_sequence[j], correct_sequence[j + 1]
+
+            if i > 0 and dp_table[i - 1, frame_to_index[prev_i]] == 0: continue
+            
+            cands_i = [f for f_idx, count in enumerate(dp_table[i]) if count > 0 and (f := key_frame_ids[f_idx]) != orig_i and f in graph.get(prev_i, [])]
+
+            for cand_i in cands_i:
+                is_adjacent = (j == i + 1)
+                prev_j = cand_i if is_adjacent else correct_sequence[j - 1]
+                if not is_adjacent and correct_sequence[i + 1] not in graph.get(cand_i, []): continue
+                if dp_table[j - 1, frame_to_index[prev_j]] == 0: continue
+                
+                cands_j = [f for f_idx, count in enumerate(dp_table[j]) if count > 0 and (f := key_frame_ids[f_idx]) != orig_j and f in graph.get(prev_j, []) and next_j in graph.get(f, [])]
+
+                for cand_j in cands_j:
+                    new_seq = list(correct_sequence)
+                    new_seq[i], new_seq[j] = cand_i, cand_j
+                    if self._validate_not_all_subsets(task_data, correct_sequence, new_seq):
+                        all_possible_2_swaps.append(new_seq)
+        
+        # Step 2: Shuffle the collected pool
+        random.shuffle(all_possible_2_swaps)
+        
+        # Step 3: Add from the shuffled pool until `need` is met
+        for new_seq in all_possible_2_swaps:
+            if need <= 0: break
+            t_seq = tuple(new_seq)
+            if t_seq not in generated_distractors:
+                generated_distractors.add(t_seq)
+                out.append(new_seq)
+                need -= 1
+
+        return out[:num_to_generate]
 
     def _generate_distractor_sequences(
         self,
         correct_sequence: List[str],
         all_valid_sequences: List[List[str]],
-        task_data: TaskData
+        task_data: TaskData,
+        graph: Dict[str, List[str]],
+        dp_table: np.ndarray,
+        key_frame_ids: List[str],
+        frame_to_index: Dict[str, int]
     ) -> List[List[str]]:
         """
         Generates `self.option_num - 1` distractor sequences based on the defined heuristics.
@@ -1203,68 +1483,66 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
 
         # Heuristic 1: Get similar sequences, always try to get 1/3 of the distractors
         # Try to find a sequence that shares the first step but diverges.
+        num_hard_negatives_to_gen = (self.option_num - 1) // 3 * 3
         if len(correct_sequence) > 2:
-            searched_num = (self.option_num-1) // 3
-            cur_num = 0
-            for seq in similar_sequences:
-                if cur_num >= searched_num:
-                    break
-                if self._validate_not_all_subsets(task_data, correct_sequence, seq):
-                    distractors.append(seq)
-                    candidate_pool.remove(seq)
-                    cur_num += 1
+            hard_negatives = self._generate_hard_negatives_by_modification(
+                correct_sequence,
+                graph,
+                dp_table,
+                key_frame_ids,
+                frame_to_index,
+                num_hard_negatives_to_gen,
+                task_data
+            )
+            distractors.extend(hard_negatives)
 
-        # Heuristic 2: Incorrect Order (Medium), another 1/3 of the distractors
-        if len(distractors) < self.option_num - 1 and len(correct_sequence) > 2:
-            searched_num = (self.option_num - 1) // 3
-            cur_num = 0
-            attempts = 0
-            max_attempts = searched_num * 10  # Avoid infinite loops
-            
-            while cur_num < searched_num and attempts < max_attempts:
-                attempts += 1
-                answer_part = correct_sequence[1:]  # Exclude first frame from shuffling
+            # Remove the newly generated distractors from the candidate_pool to avoid duplicates
+            # Using a set for efficient lookup
+            hard_negatives_set = {tuple(seq) for seq in hard_negatives}
+            candidate_pool = [seq for seq in candidate_pool if tuple(seq) not in hard_negatives_set]
+
+        # if len(correct_sequence) > 2:
+        #     searched_num = (self.option_num-1) // 3
+        #     cur_num = 0
+        #     for seq in similar_sequences:
+        #         if cur_num >= searched_num:
+        #             break
+        #         if self._validate_not_all_subsets(task_data, correct_sequence, seq):
+        #             distractors.append(seq)
+        #             candidate_pool.remove(seq)
+        #             cur_num += 1
+
+        # Heuristic 2 (New): Enumerate all single-pair-swapped sequences
+        num_incorrect_order_to_gen = self.option_num - 1 - len(distractors)
+        cur_num = 0
+        
+        answer_part = correct_sequence[1:]
+        if len(answer_part) >= 2:
+            # Generate all unique pairs of indices to swap, e.g., (0, 1), (0, 2), (1, 2), ...
+            for i, j in itertools.combinations(range(len(answer_part)), 2):
+                if cur_num >= num_incorrect_order_to_gen:
+                    break
+
+                # Create the new sequence by swapping the pair
+                permuted_part = answer_part[:]
+                permuted_part[i], permuted_part[j] = permuted_part[j], permuted_part[i]
+                distractor_candidate = [correct_sequence[0]] + permuted_part
                 
-                # 70% probability for slight shuffle, 30% for full shuffle
-                if random.random() < 0.7:
-                    # Slight shuffle: swap a random pair of frames
-                    if len(answer_part) >= 2:
-                        shuffled_answer = answer_part[:]
-                        # Pick two different random indices to swap
-                        idx1, idx2 = random.sample(range(len(shuffled_answer)), 2)
-                        shuffled_answer[idx1], shuffled_answer[idx2] = shuffled_answer[idx2], shuffled_answer[idx1]
-                    else:
-                        # If only one element, can't do slight shuffle, skip this attempt
-                        continue
-                else:
-                    # Full shuffle: shuffle all remaining frames
-                    shuffled_answer = answer_part[:]
-                    # Shuffle until it's different from the original
-                    shuffle_attempts = 0
-                    while shuffled_answer == answer_part and shuffle_attempts < 10:
-                        random.shuffle(shuffled_answer)
-                        shuffle_attempts += 1
+                # Perform the same validity checks as before
+                # Using a set for the main check is more efficient
+                distractor_set = {tuple(d) for d in distractors}
+                if (tuple(distractor_candidate) not in distractor_set and
+                    self._validate_not_all_subsets(task_data, correct_sequence, distractor_candidate)):
                     
-                    # If we couldn't create a different sequence, skip this attempt
-                    if shuffled_answer == answer_part:
-                        continue
-                
-                # Reconstruct the sequence, starting with the correct first frame
-                shuffled_sequence = [correct_sequence[0]] + shuffled_answer
-                
-                # Check if this distractor is valid and unique
-                if (shuffled_sequence not in distractors and 
-                    shuffled_sequence != correct_sequence and 
-                    shuffled_sequence in candidate_pool and
-                    self._validate_not_all_subsets(task_data, correct_sequence, shuffled_sequence)):
-                    
-                    distractors.append(shuffled_sequence)
-                    candidate_pool.remove(shuffled_sequence)
+                    distractors.append(distractor_candidate)
+                    # It's safer to create a new pool after modifications or filter it at the end
+                    # but for simplicity, we keep the remove() operation as in the original
+                    candidate_pool.remove(distractor_candidate) if distractor_candidate in candidate_pool else None
                     cur_num += 1
 
         # Heuristic 3: Partial Execution (Easy), another 1/3 of the distractors
-        if len(distractors) < self.option_num - 1 and len(correct_sequence) > 2:
-            searched_num = (self.option_num - 1) // 3
+        if len(distractors) < self.option_num - 1:
+            searched_num = (self.option_num - 1) - len(distractors)
             cur_num = 0
             attempts = 0
             max_attempts = searched_num * 10  # Avoid infinite loops
@@ -1293,11 +1571,10 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
                 # Check if this distractor is valid and unique
                 if (partial_execution_seq not in distractors and 
                     partial_execution_seq != correct_sequence and
-                    partial_execution_seq in candidate_pool and
                     self._validate_not_all_subsets(task_data, correct_sequence, partial_execution_seq)):
                     
                     distractors.append(partial_execution_seq)
-                    candidate_pool.remove(partial_execution_seq)
+                    candidate_pool.remove(partial_execution_seq) if partial_execution_seq in candidate_pool else None
                     cur_num += 1
 
         # Heuristic 4: Fill with random valid sequences (Fallback)
@@ -1331,7 +1608,7 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         
         # Format: "First, [action1]. Then, [action2]. Finally, [action3]."
         formatted_actions = []
-        action_template = "[Action {i}]. {action}"
+        action_template = "[Action {i}] {action}"
         for i, desc in enumerate(action_descriptions):
             action = action_template.format(i=i+1, action=desc)
             formatted_actions.append(action)
@@ -1457,7 +1734,6 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
         except Exception as e:
             print(f"Error creating labeled filmstrip for {output_path}: {e}")
             
-
     def _create_visual_prompt_for_sequences(
         self,
         qa_id: str,
@@ -1591,11 +1867,14 @@ class MultiStepForwardDynamicsGenerator(AbstractQAGenerator):
             "options": final_option_images, # Paths to filmstrips or list of lists of paths
             "correct_option": chr(correct_option_index + 65),
         }
+
+        images = [final_start_image] + final_option_images
         
         qa_pair = QAPair(
             id=qa_id,
-            images=[final_start_image], # The input is the (potentially labeled) starting image
-            meta_info=[self.step_length],
+            images=images,
+            task_name=task_data.task_name,
+            key_frame_ids=correct_sequence,
             question=question,
             gt_answer=gt_answer
         )
