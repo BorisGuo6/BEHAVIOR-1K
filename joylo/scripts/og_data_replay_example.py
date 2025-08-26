@@ -171,7 +171,7 @@ def replay_hdf5_file(hdf_input_path):
         "sensor_type": "VisionSensor",
         "name": f"external_sensor{idx}",
         "relative_prim_path": f"/controllable__r1pro__robot_r1/zed_link/external_sensor{idx}",
-        "modalities": ["rgb", "seg_instance_id", "seg_instance"],
+        "modalities": ["rgb"],
         "sensor_kwargs": {
             "image_height": RESOLUTION_DEFAULT,
             "image_width": RESOLUTION_DEFAULT,
@@ -372,7 +372,7 @@ def main():
     parser.add_argument("--dir", help="Directory containing HDF5 files to process")
     parser.add_argument("--files", nargs="*", help="Individual HDF5 file(s) to process")
 
-    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_raw_files/laptop_0/canning_food_1751278778230696.hdf5"]
+    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_raw_files/laptop_0/assembling_gift_baskets_1749468508582193.hdf5"]
     # default_dir = "/home/mll-laptop-1/01_projects/03_behavior_challenge/raw_demos/Jul_2_demos/cleaning_up_plates_and_food_1747365183765658_cleaning_up_plates_and_food.hdf5"
     
     args = parser.parse_args()

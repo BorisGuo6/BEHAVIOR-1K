@@ -315,6 +315,21 @@ class VisionSensor(BaseSensor):
             else:
                 raise ValueError(f"Unsupported device {og.sim.device}")
 
+            # Check for empty sensor data after preprocessing (now guaranteed to be torch tensor)
+            if obs[modality].numel() == 0:
+                log.warning(f"Empty {modality} data received from sensor '{self.name}'. Attempting recovery with additional render pass...")
+                og.sim.render()
+                raw_obs = self._annotators[modality].get_data(device=og.sim.device)
+                obs[modality] = raw_obs["data"] if isinstance(raw_obs, dict) else raw_obs
+                
+                # Reprocess the new data
+                if og.sim.device == "cpu":
+                    obs[modality] = self._preprocess_cpu_obs(obs[modality], modality)
+                elif "cuda" in og.sim.device:
+                    obs[modality] = self._preprocess_gpu_obs(obs[modality], modality)
+                
+                assert obs[modality].numel() != 0, f"Failed to retrieve {modality} data from sensor '{self.name}' after recovery attempt. This may indicate a rendering or sensor configuration issue."
+
             if "seg_" in modality or "bbox_" in modality:
                 self._remap_modality(modality, obs, info, raw_obs)
         return obs, info
