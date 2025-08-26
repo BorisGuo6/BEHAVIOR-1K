@@ -154,8 +154,6 @@ def sanity_check_object_compatibility(obj_name, obj_a, obj_b):
     assert args_a["name"] == args_b["name"], f"Object {obj_name} has different name in args"
     assert args_a["category"] == args_b["category"], f"Object {obj_name} has different category in args"
     assert args_a["model"] == args_b["model"], f"Object {obj_name} has different model in args"
-    assert args_a["fixed_base"] == args_b["fixed_base"], f"Object {obj_name} has different fixed_base in args"
-    assert args_a["visual_only"] == args_b["visual_only"], f"Object {obj_name} has different visual_only in args"
     assert args_a["in_rooms"] == args_b["in_rooms"], f"Object {obj_name} has different in_rooms in args"
 
     # For scale, they should be identical

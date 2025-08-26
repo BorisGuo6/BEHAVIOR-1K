@@ -70,6 +70,8 @@ Your response **must be only** a Python list of integers representing the correc
 
 ## Actions in Order
 {STATE_CHANGES}
+
+Now please provide your answer in the requested format.
 '''
 
 multi_inv_ordering_prompt = '''You are a capable agent designed to infer multi-step inverse dynamics transitions in embodied decision-making. Your goal is to determine the correct chronological order of actions that caused the state transitions shown in a sequence of images.
@@ -88,4 +90,6 @@ Your response **must be only** a Python list of integers representing the correc
 
 ## Shuffled Actions
 {SHUFFLED_ACTIONS}
+
+Now please provide your answer in the requested format.
 '''

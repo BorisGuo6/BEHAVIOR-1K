@@ -1,4 +1,4 @@
-from omnigibson.envs import SceneGraphDataPlaybackWrapper
+from omnigibson.envs import SceneGraphDataPlaybackWrapper, DataPlaybackWrapper
 from omnigibson.utils.config_utils import TorchEncoder
 from omnigibson.utils.scene_graph_utils import SceneGraphWriter
 import torch as th
@@ -17,11 +17,12 @@ import cv2
 import multiprocessing as mp
 
 RUN_QA = False
+RUN_SCENE_GRAPH = False
 
 gm.RENDER_VIEWER_CAMERA = False
 gm.DEFAULT_VIEWER_WIDTH = 128
 gm.DEFAULT_VIEWER_HEIGHT = 128
-gm.HEADLESS = True
+# gm.HEADLESS = True
 
 
 def extract_arg_names(func):
@@ -118,7 +119,7 @@ def replay_hdf5_file(hdf_input_path):
         hdf_input_path = new_hdf_input_path
     
     # Define resolution for consistency
-    RESOLUTION_DEFAULT = 560
+    RESOLUTION_DEFAULT = 512
     RESOLUTION_WRIST = 240
     
     # This flag is needed to run data playback wrapper
@@ -148,6 +149,7 @@ def replay_hdf5_file(hdf_input_path):
     # Generate external sensors config automatically
     external_sensors_config = []
     for i, (position, orientation) in enumerate(external_camera_poses):
+        continue
         external_sensors_config.append({
             "sensor_type": "VisionSensor",
             "name": f"external_sensor{i}",
@@ -164,7 +166,7 @@ def replay_hdf5_file(hdf_input_path):
         })
 
     # Replace normal head camera with custom config
-    idx = len(external_sensors_config)
+    idx = 1
     external_sensors_config.append({
         "sensor_type": "VisionSensor",
         "name": f"external_sensor{idx}",
@@ -180,27 +182,61 @@ def replay_hdf5_file(hdf_input_path):
         "pose_frame": "parent",
     })
 
+    # get task name from hdf5 file
+    task_name = hdf_input_path.split("/")[-1].split("_")[:-1]
+    task_name = "_".join(task_name)
+
     # Create the environment
     additional_wrapper_configs = []
     if RUN_QA:
         additional_wrapper_configs.append({
             "type": "MetricsWrapper",
         })
-    env = SceneGraphDataPlaybackWrapper.create_from_hdf5(
-        input_path=hdf_input_path,
-        output_path=hdf_output_path,
-        robot_obs_modalities=["rgb", "seg_instance"],
-        robot_sensor_config=robot_sensor_config,
-        external_sensors_config=external_sensors_config,
-        exclude_sensor_names=["zed"],
-        n_render_iterations=1,
-        only_successes=False,
-        additional_wrapper_configs=additional_wrapper_configs,
-        include_task=True,
-        include_task_obs=False,
-        include_robot_control=False,
-        include_contacts=True,
+
+    # get full scene file
+    task_scene_file_folder = os.path.join(
+        os.path.dirname(os.path.dirname(og.__path__[0])), "joylo", "sampled_task", task_name
     )
+
+    full_scene_file = None
+    for file in os.listdir(task_scene_file_folder):
+        if file.endswith(".json") and "partial_rooms" not in file:
+            full_scene_file = os.path.join(task_scene_file_folder, file)
+    assert full_scene_file is not None, f"No full scene file found in {task_scene_file_folder}"
+
+    if RUN_SCENE_GRAPH:
+        env = SceneGraphDataPlaybackWrapper.create_from_hdf5(
+            input_path=hdf_input_path,
+            output_path=hdf_output_path,
+            robot_obs_modalities=["rgb", "seg_instance"],
+            robot_sensor_config=robot_sensor_config,
+            external_sensors_config=external_sensors_config,
+            exclude_sensor_names=["zed"],
+            n_render_iterations=1,
+            only_successes=False,
+            additional_wrapper_configs=additional_wrapper_configs,
+            include_task=True,
+            include_task_obs=False,
+            include_robot_control=False,
+            include_contacts=True,
+        )
+    else:
+        env = DataPlaybackWrapper.create_from_hdf5(
+            input_path=hdf_input_path,
+            output_path=hdf_output_path,
+            robot_obs_modalities=["rgb"],
+            robot_sensor_config=robot_sensor_config,
+            external_sensors_config=external_sensors_config,
+            exclude_sensor_names=["zed"],
+            n_render_iterations=3,
+            only_successes=False,
+            additional_wrapper_configs=additional_wrapper_configs,
+            include_task=True,
+            include_task_obs=False,
+            include_robot_control=False,
+            include_contacts=True,
+            full_scene_file=full_scene_file,
+        )
 
     # Optimize rendering for faster speeds
     og.sim.add_callback_on_play("optimize_rendering", optimize_sim_settings)
@@ -262,7 +298,7 @@ def replay_hdf5_file(hdf_input_path):
 
     # Create video writers for external cameras
     for i in range(len(external_sensors_config)):
-        camera_name = f"external_sensor{i}"
+        camera_name = f"external_sensor{i+1}"
         video_writers.append(env.create_video_writer(fpath=f"{video_dir}/{camera_name}.mp4"))
         video_rgb_keys.append(f"external::{camera_name}::rgb")
         frame_writers.append(env.create_frame_writer(output_dir=f"{video_dir}/{camera_name}/"))
@@ -284,29 +320,42 @@ def replay_hdf5_file(hdf_input_path):
     start_frame = None
     end_frame = None
 
-    # for episode_id in range(env.input_hdf5["data"].attrs["n_episodes"]):
-    #     scene_graph_writer = SceneGraphWriter(output_path=os.path.join(folder_path, f"scene_graph_{episode_id}.json"), interval=200, buffer_size=200, write_full_graph_only=True)
-    #     env.playback_episode(
-    #         episode_id=episode_id,
-    #         record_data=False,
-    #         video_writers=video_writers,
-    #         video_rgb_keys=video_rgb_keys,
-    #         frame_writers=None,
-    #         frame_rgb_keys=None,
-    #         start_frame=start_frame,
-    #         end_frame=end_frame,
-    #         scene_graph_writer=scene_graph_writer,
-    #         replay_config=replay_config,
-    #     )
+    for episode_id in range(env.input_hdf5["data"].attrs["n_episodes"]):
+        if RUN_SCENE_GRAPH:
+            scene_graph_writer = SceneGraphWriter(output_path=os.path.join(folder_path, f"scene_graph_{episode_id}.json"), interval=200, buffer_size=200, write_full_graph_only=True)
+            env.playback_episode(
+                episode_id=episode_id,
+                record_data=False,
+                video_writers=video_writers,
+                video_rgb_keys=video_rgb_keys,
+                frame_writers=None,
+                frame_rgb_keys=None,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                scene_graph_writer=scene_graph_writer,
+                replay_config=replay_config,
+            )
+        else:
+            env.playback_episode(
+                episode_id=episode_id,
+                record_data=False,
+                video_writers=video_writers,
+                video_rgb_keys=video_rgb_keys,
+                # frame_writers=None,
+                # frame_rgb_keys=None,
+                # start_frame=start_frame,
+                # end_frame=end_frame,
+                # replay_config=replay_config,
+            )
     # Close all video writers
     for writer in video_writers:
         writer.close()
     
     # Decompose videos into frames
-    for video_writer in video_writers:
-        video_path = video_writer._filename
-        output_folder = os.path.splitext(video_path)[0]
-        decompose_video_parallel(video_path, output_folder, base_frame_id=start_frame)
+    # for video_writer in video_writers:
+    #     video_path = video_writer._filename
+    #     output_folder = os.path.splitext(video_path)[0]
+    #     decompose_video_parallel(video_path, output_folder, base_frame_id=start_frame)
 
 
 
@@ -323,12 +372,12 @@ def main():
     parser.add_argument("--dir", help="Directory containing HDF5 files to process")
     parser.add_argument("--files", nargs="*", help="Individual HDF5 file(s) to process")
 
-    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/replayed_trajectories/cook_cabbage_1753781960466556.hdf5"]
+    default_files = ["/home/mll-laptop-1/01_projects/03_behavior_challenge/BehaviorEQA_raw_files/laptop_0/canning_food_1751278778230696.hdf5"]
     # default_dir = "/home/mll-laptop-1/01_projects/03_behavior_challenge/raw_demos/Jul_2_demos/cleaning_up_plates_and_food_1747365183765658_cleaning_up_plates_and_food.hdf5"
     
     args = parser.parse_args()
 
-    # args.files = default_files
+    args.files = default_files
     # args.dir = default_dir
     
     if args.dir and os.path.isdir(args.dir):
