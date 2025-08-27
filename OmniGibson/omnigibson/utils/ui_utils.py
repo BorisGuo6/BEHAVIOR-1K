@@ -5,7 +5,6 @@ Helper classes and functions for streamlining user interactions
 import contextlib
 import logging
 import random
-import sys
 
 import matplotlib.path as mpath
 import torch as th
@@ -632,11 +631,12 @@ class KeyboardRobotController:
                     binary_gripper
                 ]
 
+        # TODO: this currently conflicts with omniverse logging and spams the window
         # Print out the user what is being pressed / controlled
-        sys.stdout.write("\033[K")
-        keypress_str = self.current_keypress.__str__().split(".")[-1]
-        print("Pressed {}. Action: {}".format(keypress_str, action.tolist()))
-        sys.stdout.write("\033[F")
+        # sys.stdout.write("\033[K")
+        # keypress_str = self.current_keypress.__str__().split(".")[-1]
+        # print("Pressed {}. Action: {}".format(keypress_str, action.tolist()))
+        # sys.stdout.write("\033[F")
 
         # Return action
         return action
