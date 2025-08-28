@@ -14,16 +14,18 @@ gm.DEFAULT_VIEWER_WIDTH = 128
 gm.DEFAULT_VIEWER_HEIGHT = 128
 
 
-TRIAL_RUN = True
+TRIAL_RUN = False
 TRAVERSAL_SHOT = False
+FULL_SCENE = True
+TOP_SHOT = False
 
 CAMERA_WIDTH = 3840
 CAMERA_HEIGHT = 2160
 APERTURE = 35.0
 
-CAMERA_RELATIVE_PRIM_PATH = "/main_camera" # "/controllable__r1pro__robot_r1/base_link/main_camera"
-CAMERA_OFFSET_POSITION = [20.0, 10.0, 1.0] # [ 5.8433, -3.4791,  1.6609] # [-0.4, 0, 2.0]
-CAMERA_OFFSET_ORIENTATION = [0.0, 0.0, 0.0, 1.0] # [0.6366, 0.0623, 0.0749, 0.7650] # [0.2706, -0.2706, -0.6533,  0.6533]
+CAMERA_RELATIVE_PRIM_PATH = "/main_camera" # "/controllable__r1pro__robot_r1/zed_link/main_camera" # "/controllable__r1pro__robot_r1/base_link/main_camera"
+CAMERA_OFFSET_POSITION = [0.0,0.0,0.0] # [-0.2000,  4.0000, 10.1000] # [0.06, 0.0, 0.01] # [20.0, 10.0, 1.0] # [ 5.8433, -3.4791,  1.6609] # [-0.4, 0, 2.0]
+CAMERA_OFFSET_ORIENTATION = [0.0,0.0,0.0,1.0] # [ 0.0000,  0.0000, -0.7071,  0.7071] # [-1.0, 0.0, 0.0, 0.0] # [0.6366, 0.0623, 0.0749, 0.7650] # [0.2706, -0.2706, -0.6533,  0.6533]
 
 OBJECTS_TO_HIDE = [
     "clothesline_pole_smrqrw_0",
@@ -61,6 +63,19 @@ SLIDING_DOORS_TO_OPEN = [
     "sliding_door_tprpvb_6",
 ]
 
+TOP_CATEGORIES_TO_HIDE = [
+    "roof",
+    "ceilings",
+    "tree",
+    "bush",
+    "downlight",
+    "track_light",
+    "room_light",
+    "hall_tree",
+] 
+# garage_door_prdjyt_0 base_link
+# unhide bush_cwsigt
+# (tensor([-0.2000,  4.0000, 10.1000]), tensor([ 0.0000,  0.0000, -0.7071,  0.7071]))
 
 def replay_hdf5_file(hdf_input_path, camera_motion_config=None):
     """
@@ -93,12 +108,22 @@ def replay_hdf5_file(hdf_input_path, camera_motion_config=None):
         "sensor_kwargs": {
             "image_height": CAMERA_HEIGHT,
             "image_width": CAMERA_WIDTH,
-            # "horizontal_aperture": APERTURE,
+            "horizontal_aperture": APERTURE,
         },
         "position": th.tensor(CAMERA_OFFSET_POSITION, dtype=th.float32),
         "orientation": th.tensor(CAMERA_OFFSET_ORIENTATION, dtype=th.float32),
         "pose_frame": "parent",
     }
+    
+    full_scene_file = None
+    if FULL_SCENE:
+        task_scene_file_folder = os.path.join(
+            os.path.dirname(os.path.dirname(og.__path__[0])), "joylo", "sampled_task", "loading_the_car"
+        )
+        for file in os.listdir(task_scene_file_folder):
+            if file.endswith(".json") and "partial_rooms" not in file:
+                full_scene_file = os.path.join(task_scene_file_folder, file)
+        assert full_scene_file is not None, f"No full scene file found in {task_scene_file_folder}"
 
     # Create the environment
     # TODO: need to merge scene files to create full scene for final rendering
@@ -115,11 +140,21 @@ def replay_hdf5_file(hdf_input_path, camera_motion_config=None):
         include_task_obs=False,
         include_robot_control=False,
         include_contacts=False,
+        full_scene_file=full_scene_file,
     )
     
     robot = env.robots[0]
     robot.links["left_eef_link"].visible = False
     robot.links["right_eef_link"].visible = False
+    
+    if TOP_SHOT:
+        for obj in env.scene.objects:
+            if obj.category in TOP_CATEGORIES_TO_HIDE:
+                obj.visible = False
+            if obj.name == "garage_door_prdjyt_0":
+                obj.links["base_link"].visible = False
+            if "bush_cwsigt" in obj.name:
+                obj.visible = True
 
     # Optimize rendering for faster speeds
     og.sim.add_callback_on_play("optimize_rendering", optimize_sim_settings)
@@ -244,6 +279,12 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
         for door in SLIDING_DOORS_TO_OPEN:
             env.scene.object_registry("name", door).states[Open].set_value(True)
 
+    # Create persistent color map for instance IDs
+    import numpy as np
+    import colorsys
+    instance_color_map = {}
+    next_color_index = 0
+    
     # Record initial observations with camera motion
     frame_count = 0
 
@@ -255,6 +296,26 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
     
     for _ in range(20):
         og.sim.render()
+    
+    # Adjust camera pose
+    breakpoint()
+
+    # # Calculate total frames and randomize start/end frames
+    # import random
+    # total_frames = len(action)  # Total trajectory length
+    
+    # # Ensure we have enough frames for a 300-frame window
+    # if total_frames > 300:
+    #     # Random start frame, ensuring end frame doesn't exceed total
+    #     max_start = total_frames - 300
+    #     random_start_frame = random.randint(0, max_start)
+    #     random_end_frame = random_start_frame + 300
+    # else:
+    #     # If trajectory is shorter than 300 frames, use full trajectory
+    #     random_start_frame = 0
+    #     random_end_frame = total_frames
+    
+    # print(f"Using randomized frames: start={random_start_frame}, end={random_end_frame}, total={total_frames}")
 
     for i, (a, s, ss, r, te, tr) in enumerate(
         zip(action, state[1:], state_size[1:], reward, terminated, truncated)
@@ -288,11 +349,11 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
             continue
         elif camera_motion_controller and frame_count > camera_motion_controller.motions[0].end_frame:
             break
-        # elif frame_count < 3000:
+        # elif frame_count < 3400:
         #     env.step_count += 1
         #     frame_count += 1
         #     continue
-        # elif frame_count > 4200:
+        # elif frame_count > 12300:
         #     break
         else:
             if TRIAL_RUN:
@@ -311,6 +372,8 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
             
             # Take simulation step with action
             env.current_obs, _, _, _, info = env.env.step(action=a, n_render_iterations=3)
+            # env.current_obs.pop("external::main_camera::seg_semantic")
+            # env.current_obs["external::main_camera::seg_instance_id"] = env.current_obs["external::main_camera::seg_instance_id"].cpu()
 
             # Record data
             step_data = env._parse_step_data(
@@ -328,7 +391,78 @@ def playback_episode_with_camera_motion(env, episode_id, video_writers, video_rg
                 for writer, rgb_key in zip(video_writers, video_rgb_keys):
                     from omnigibson.utils.python_utils import assert_valid_key
                     assert_valid_key(rgb_key, env.current_obs.keys(), "video_rgb_key")
-                    writer.append_data(env.current_obs[rgb_key][:, :, :3].numpy())
+                    
+                    # Check if this is a depth key
+                    if 'depth' in rgb_key:
+                        import numpy as np
+                        
+                        # Get depth data and convert to numpy
+                        depth_data = env.current_obs[rgb_key].numpy()
+                        
+                        # Normalize depth to 0-255 range
+                        # Clip to reasonable range (e.g., 0-10 meters)
+                        depth_clipped = np.clip(depth_data, 0, 10)
+                        depth_normalized = (depth_clipped / 10.0 * 255).astype(np.uint8)
+                        
+                        # Convert to 3-channel grayscale for video writer
+                        depth_gray_rgb = np.stack([depth_normalized] * 3, axis=-1)
+                        
+                        writer.append_data(depth_gray_rgb)
+                    # Check if this is a segmentation key
+                    elif 'seg_instance_id' in rgb_key:
+                        # Get segmentation data and convert to numpy
+                        seg_data = env.current_obs[rgb_key].numpy()
+                        
+                        # Get the corresponding RGB image
+                        # Extract the camera name from the segmentation key
+                        camera_name = rgb_key.replace('::seg_instance_id', '::rgb')
+                        if camera_name in env.current_obs:
+                            rgb_image = env.current_obs[camera_name][:, :, :3].numpy()
+                        else:
+                            # Fallback to creating a neutral gray background
+                            rgb_image = np.ones_like(seg_data)[:, :, np.newaxis] * 128
+                            rgb_image = np.repeat(rgb_image, 3, axis=2).astype(np.uint8)
+                        
+                        # Get unique IDs in current frame
+                        unique_ids = np.unique(seg_data)
+                        
+                        # Generate colors for new instance IDs not seen before
+                        golden_ratio = (1 + np.sqrt(5)) / 2
+                        for instance_id in unique_ids:
+                            if instance_id not in instance_color_map:
+                                if instance_id == 0:  # Background/void - transparent
+                                    instance_color_map[instance_id] = [0, 0, 0]
+                                else:
+                                    # Generate color using golden ratio for good distribution
+                                    hue = (next_color_index * golden_ratio) % 1.0
+                                    saturation = 0.8 + (next_color_index % 3) * 0.1  # Higher saturation for overlay
+                                    value = 0.9 + (next_color_index % 2) * 0.1  # Brighter for visibility
+                                    
+                                    rgb = colorsys.hsv_to_rgb(hue, saturation, value)
+                                    instance_color_map[instance_id] = (np.array(rgb) * 255).astype(np.uint8)
+                                    next_color_index += 1
+                        
+                        # Create color array for current frame
+                        max_id = seg_data.max()
+                        colors = np.zeros((max_id + 1, 3), dtype=np.uint8)
+                        for instance_id, color in instance_color_map.items():
+                            if instance_id <= max_id:
+                                colors[instance_id] = color
+                        
+                        # Apply color mapping
+                        seg_colored = colors[seg_data]
+                        
+                        # Create alpha mask - transparent for background (ID 0), semi-transparent for objects
+                        alpha = 0.5  # Transparency level for segmentation overlay
+                        mask = (seg_data != 0).astype(np.float32)[:, :, np.newaxis]
+                        
+                        # Blend segmentation with RGB using alpha compositing
+                        blended = (rgb_image * (1 - mask * alpha) + seg_colored * mask * alpha).astype(np.uint8)
+                        
+                        writer.append_data(blended)
+                    else:
+                        # Regular RGB handling
+                        writer.append_data(env.current_obs[rgb_key][:, :, :3].numpy())
 
         env.step_count += 1
         frame_count += 1
