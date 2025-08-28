@@ -305,20 +305,21 @@ def create_orbit_path(center_pos, radius, height, n_steps, tilt_deg=0):
         pan_angle = i * 2 * th.pi / n_steps
         dx = radius * th.cos(pan_angle)
         dy = radius * th.sin(pan_angle)
-        
+
         pos = th.tensor([center_pos[0] + dx, center_pos[1] + dy, center_pos[2] + height])
-        
+
         # Point camera towards the center
-        direction = (center_pos - pos)
+        direction = center_pos - pos
         # We can use your existing helper or a more standard look_at function
-        quat = T.quat_from_vectors(th.tensor([0, 0, -1]), direction) # Simplified; a robust look_at is better
+        quat = T.quat_from_vectors(th.tensor([0, 0, -1]), direction)  # Simplified; a robust look_at is better
 
         # Apply tilt
         tilt_quat = T.euler2quat([tilt_rad, 0, 0])
         final_quat = T.quat_multiply(quat, tilt_quat)
-        
+
         poses.append([pos, final_quat])
     return poses
+
 
 def create_spline_path_from_waypoints(waypoints, per_step_distance=0.05):
     """
@@ -369,11 +370,11 @@ def create_spline_path_from_waypoints(waypoints, per_step_distance=0.05):
         positions = get_interpolated_positions(step=i)
         n_steps = len(positions) - 1
         n_steps_per_waypoint.append(n_steps)
-        
+
         # Get start and end quaternions for this waypoint segment
         start_quat = quat_waypoints[i]
         end_quat = quat_waypoints[i + 1]
-        
+
         for j in range(n_steps):
             # Interpolate orientation using slerp
             t = j / max(n_steps - 1, 1)  # Avoid division by zero
@@ -400,33 +401,33 @@ def generate_camera_orientation_from_direction(positions, extra_tilt=0.0):
         # Get direction vector from current to next position
         direction = positions[i + 1] - positions[i]
         direction = direction / th.norm(direction)
-        
+
         # Infer tilt and pan angles from this direction
         xy_direction = direction[:2] / th.norm(direction[:2])
         z = direction[2]
         pan_angle = th.arctan2(-xy_direction[0], xy_direction[1])
         tilt_angle = th.arcsin(z)
-        
+
         # Generate quaternion from euler angles
         quat = T.euler2quat([math.pi / 2 + tilt_angle + extra_tilt, 0.0, pan_angle])
         quats.append(quat)
-    
+
     # For the last position, use the same orientation as the second-to-last
     if len(quats) > 0:
         quats.append(quats[-1])
-    
+
     return quats
 
 
 def create_dolly_path(start_pos, end_pos, n_steps):
     """
     Creates a simple linear dolly movement between two positions.
-    
+
     Args:
         start_pos (th.tensor): (3,) starting position
-        end_pos (th.tensor): (3,) ending position  
+        end_pos (th.tensor): (3,) ending position
         n_steps (int): Number of steps in the path
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
@@ -435,26 +436,26 @@ def create_dolly_path(start_pos, end_pos, n_steps):
         t = i / max(n_steps - 1, 1)
         pos = start_pos + t * (end_pos - start_pos)
         positions.append(pos)
-    
+
     # Generate orientations based on movement direction
     if n_steps > 1:
         quats = generate_camera_orientation_from_direction(th.stack(positions))
         return [[pos, quat] for pos, quat in zip(positions, quats)]
     else:
         # Single position, use identity orientation
-        return [[positions[0], th.tensor([0., 0., 0., 1.])]]
+        return [[positions[0], th.tensor([0.0, 0.0, 0.0, 1.0])]]
 
 
 def create_crane_path(start_pos, end_pos, height_curve, n_steps):
     """
     Creates a crane-like arc movement with varying height.
-    
+
     Args:
         start_pos (th.tensor): (3,) starting position
         end_pos (th.tensor): (3,) ending position
         height_curve (float): Maximum height offset at the midpoint
         n_steps (int): Number of steps in the path
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
@@ -465,121 +466,121 @@ def create_crane_path(start_pos, end_pos, height_curve, n_steps):
         base_pos = start_pos + t * (end_pos - start_pos)
         # Parabolic arc for height
         height_offset = height_curve * (4 * t * (1 - t))  # Peaks at t=0.5
-        pos = base_pos + th.tensor([0., 0., height_offset])
+        pos = base_pos + th.tensor([0.0, 0.0, height_offset])
         positions.append(pos)
-    
+
     # Generate orientations based on movement direction
     if n_steps > 1:
         quats = generate_camera_orientation_from_direction(th.stack(positions))
         return [[pos, quat] for pos, quat in zip(positions, quats)]
     else:
-        return [[positions[0], th.tensor([0., 0., 0., 1.])]]
+        return [[positions[0], th.tensor([0.0, 0.0, 0.0, 1.0])]]
 
 
 def create_pan_tilt_path(center_pos, pan_range, tilt_range, n_steps):
     """
     Creates a camera path that pans and tilts around a fixed position.
-    
+
     Args:
         center_pos (th.tensor): (3,) fixed camera position
         pan_range (tuple): (start_pan, end_pan) in radians
-        tilt_range (tuple): (start_tilt, end_tilt) in radians  
+        tilt_range (tuple): (start_tilt, end_tilt) in radians
         n_steps (int): Number of steps in the path
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
     poses = []
     pan_start, pan_end = pan_range
     tilt_start, tilt_end = tilt_range
-    
+
     for i in range(n_steps):
         t = i / max(n_steps - 1, 1)
         pan = pan_start + t * (pan_end - pan_start)
         tilt = tilt_start + t * (tilt_end - tilt_start)
-        
+
         # Generate quaternion from pan/tilt angles
-        quat = T.euler2quat([tilt, 0., pan])
+        quat = T.euler2quat([tilt, 0.0, pan])
         poses.append([center_pos, quat])
-    
+
     return poses
 
 
 def create_bezier_path(control_points, n_steps):
     """
     Creates a smooth camera path using Bezier curves.
-    
+
     Args:
         control_points (list): List of [position, orientation] control points
         n_steps (int): Number of steps in the path
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
     if len(control_points) < 2:
         return control_points
-    
+
     pos_controls = th.stack([cp[0] for cp in control_points])
     quat_controls = th.stack([cp[1] for cp in control_points])
-    
+
     def bezier_interpolate(points, t):
         """Recursive Bezier interpolation."""
         if len(points) == 1:
             return points[0]
-        
+
         new_points = []
         for i in range(len(points) - 1):
             new_points.append(points[i] * (1 - t) + points[i + 1] * t)
-        
+
         return bezier_interpolate(new_points, t)
-    
+
     poses = []
     for i in range(n_steps):
         t = i / max(n_steps - 1, 1)
-        
+
         # Bezier interpolation for position
         pos = bezier_interpolate(pos_controls, t)
-        
+
         # Slerp interpolation for orientation (simplified for multiple points)
         # Find the two closest control points
         segment_idx = min(int(t * (len(quat_controls) - 1)), len(quat_controls) - 2)
         segment_t = (t * (len(quat_controls) - 1)) - segment_idx
-        
+
         quat = T.quat_slerp(quat_controls[segment_idx], quat_controls[segment_idx + 1], segment_t)
         poses.append([pos, quat])
-    
+
     return poses
 
 
 def look_at_target(camera_pos, target_pos, up_vector=None):
     """
     Generate camera orientation to look at a target position.
-    
+
     Args:
         camera_pos (th.tensor): (3,) camera position
         target_pos (th.tensor): (3,) target position to look at
         up_vector (th.tensor): (3,) up vector (default: [0, 0, 1])
-        
+
     Returns:
         th.tensor: (4,) quaternion orientation
     """
     if up_vector is None:
-        up_vector = th.tensor([0., 0., 1.])
-    
+        up_vector = th.tensor([0.0, 0.0, 1.0])
+
     # Calculate forward direction
     forward = target_pos - camera_pos
     forward = forward / th.norm(forward)
-    
+
     # Calculate right vector
     right = th.cross(forward, up_vector)
     right = right / th.norm(right)
-    
+
     # Recalculate up vector
     up = th.cross(right, forward)
-    
+
     # Create rotation matrix
     rot_matrix = th.stack([right, up, -forward], dim=1)
-    
+
     # Convert to quaternion
     quat = T.mat2quat(rot_matrix)
     return quat
@@ -588,55 +589,55 @@ def look_at_target(camera_pos, target_pos, up_vector=None):
 def create_tracking_path(target_positions, camera_distance=2.0, height_offset=0.5):
     """
     Create a camera path that follows/tracks a moving target.
-    
+
     Args:
         target_positions (list): List of (3,) target positions to track
         camera_distance (float): Distance to maintain from target
         height_offset (float): Height offset above target
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
     poses = []
-    
+
     for i, target_pos in enumerate(target_positions):
         # Calculate camera position behind and above the target
         if i == 0:
             # For first position, place camera behind target (assuming forward is +Y)
-            camera_pos = target_pos + th.tensor([-camera_distance, 0., height_offset])
+            camera_pos = target_pos + th.tensor([-camera_distance, 0.0, height_offset])
         else:
             # Calculate movement direction
-            movement_dir = target_positions[i] - target_positions[i-1]
+            movement_dir = target_positions[i] - target_positions[i - 1]
             if th.norm(movement_dir) > 1e-6:
                 movement_dir = movement_dir / th.norm(movement_dir)
                 # Place camera behind the movement direction
-                camera_pos = target_pos - movement_dir * camera_distance + th.tensor([0., 0., height_offset])
+                camera_pos = target_pos - movement_dir * camera_distance + th.tensor([0.0, 0.0, height_offset])
             else:
                 # If no movement, maintain previous relative position
-                camera_pos = target_pos + th.tensor([-camera_distance, 0., height_offset])
-        
+                camera_pos = target_pos + th.tensor([-camera_distance, 0.0, height_offset])
+
         # Orient camera to look at target
         quat = look_at_target(camera_pos, target_pos)
         poses.append([camera_pos, quat])
-    
+
     return poses
 
 
 def create_close_up_shot(target_pos, approach_distance=0.5, n_steps=30):
     """
     Create a close-up shot that approaches a target.
-    
+
     Args:
         target_pos (th.tensor): (3,) position of the target
         approach_distance (float): Final distance from target
         n_steps (int): Number of steps in the approach
-        
+
     Returns:
         list: List of [position, orientation] poses
     """
     # Start from a distance and approach
     start_distance = approach_distance * 5
-    start_pos = target_pos + th.tensor([start_distance, 0., approach_distance])
-    end_pos = target_pos + th.tensor([approach_distance, 0., 0.])
-    
+    start_pos = target_pos + th.tensor([start_distance, 0.0, approach_distance])
+    end_pos = target_pos + th.tensor([approach_distance, 0.0, 0.0])
+
     return create_dolly_path(start_pos, end_pos, n_steps)
