@@ -13,32 +13,32 @@ import tqdm
 
 # List of NVIDIA PyPI packages needed for OmniGibson
 ISAAC_SIM_PACKAGES = [
-    "omniverse_kit-106.5.0.162521",
-    "isaacsim_kernel-4.5.0.0",
-    "isaacsim_app-4.5.0.0",
-    "isaacsim_core-4.5.0.0",
-    "isaacsim_gui-4.5.0.0",
-    "isaacsim_utils-4.5.0.0",
-    "isaacsim_storage-4.5.0.0",
-    "isaacsim_asset-4.5.0.0",
-    "isaacsim_sensor-4.5.0.0",
-    "isaacsim_robot_motion-4.5.0.0",
-    "isaacsim_robot-4.5.0.0",
-    "isaacsim_benchmark-4.5.0.0",
-    "isaacsim_code_editor-4.5.0.0",
-    "isaacsim_ros1-4.5.0.0",
-    "isaacsim_cortex-4.5.0.0",
-    "isaacsim_example-4.5.0.0",
-    "isaacsim_replicator-4.5.0.0",
-    "isaacsim_rl-4.5.0.0",
-    "isaacsim_robot_setup-4.5.0.0",
-    "isaacsim_ros2-4.5.0.0",
-    "isaacsim_template-4.5.0.0",
-    "isaacsim_test-4.5.0.0",
-    "isaacsim-4.5.0.0",
-    "isaacsim_extscache_physics-4.5.0.0",
-    "isaacsim_extscache_kit-4.5.0.0",
-    "isaacsim_extscache_kit_sdk-4.5.0.0",
+    "omniverse_kit-107.2.0.190954",
+    "isaacsim_kernel-5.0.0.0",
+    "isaacsim_app-5.0.0.0",
+    "isaacsim_core-5.0.0.0",
+    "isaacsim_gui-5.0.0.0",
+    "isaacsim_utils-5.0.0.0",
+    "isaacsim_storage-5.0.0.0",
+    "isaacsim_asset-5.0.0.0",
+    "isaacsim_sensor-5.0.0.0",
+    "isaacsim_robot_motion-5.0.0.0",
+    "isaacsim_robot-5.0.0.0",
+    "isaacsim_benchmark-5.0.0.0",
+    "isaacsim_code_editor-5.0.0.0",
+    "isaacsim_ros1-5.0.0.0",
+    "isaacsim_cortex-5.0.0.0",
+    "isaacsim_example-5.0.0.0",
+    "isaacsim_replicator-5.0.0.0",
+    "isaacsim_rl-5.0.0.0",
+    "isaacsim_robot_setup-5.0.0.0",
+    "isaacsim_ros2-5.0.0.0",
+    "isaacsim_template-5.0.0.0",
+    "isaacsim_test-5.0.0.0",
+    "isaacsim-5.0.0.0",
+    "isaacsim_extscache_physics-5.0.0.0",
+    "isaacsim_extscache_kit-5.0.0.0",
+    "isaacsim_extscache_kit_sdk-5.0.0.0",
 ]
 BASE_URL = "https://pypi.nvidia.com"
 
@@ -63,8 +63,8 @@ def _find_isaac_sim_path():
 
 def _get_filename(package: str, temp_dir: Path):
     if platform.system() == "Windows":
-        return temp_dir / f"{package}-cp310-none-win_amd64.whl"
-    return temp_dir / f"{package}-cp310-none-manylinux_2_34_x86_64.whl"
+        return temp_dir / f"{package}-cp311-none-win_amd64.whl"
+    return temp_dir / f"{package}-cp311-none-manylinux_2_35_x86_64.whl"
 
 
 def _download_package(url: str, filename: Path):
@@ -83,7 +83,7 @@ def _rename_if_necessary(filename: Path):
     """
     # Rename the file if the system's GLIBC version is older than the one used in the NVIDIA PyPI packages
     if platform.system() == "Linux" and _is_glibc_older():
-        new_filename = filename.with_name(filename.name.replace("manylinux_2_34", "manylinux_2_31"))
+        new_filename = filename.with_name(filename.name.replace("manylinux_2_35", "manylinux_2_31"))
         shutil.move(filename, new_filename)
         return new_filename
 
@@ -95,9 +95,9 @@ def _is_glibc_older():
     """Check if the system's GLIBC version is older than the one used in the NVIDIA PyPI packages."""
     try:
         dist_info = subprocess.check_output(["ldd", "--version"]).decode("utf-8")
-        if any(version in dist_info for version in ["2.31", "2.32", "2.33"]):
+        if any(version in dist_info for version in ["2.31", "2.32", "2.33", "2.34"]):
             return True
-        elif any(version in dist_info for version in ["2.34", "2.35", "2.36", "2.37", "2.38", "2.39"]):
+        elif any(version in dist_info for version in ["2.35", "2.36", "2.37", "2.38", "2.39"]):
             return False
         else:
             raise ValueError("Incompatible GLIBC version")
@@ -215,7 +215,7 @@ def _launcher_based_install(isaac_sim_path: Optional[Path]):
         isaac_version_str = version_content.split("-")[0]
         isaac_version_tuple = tuple(map(int, isaac_version_str.split(".")[:3]))
 
-    if isaac_version_tuple not in ((4, 5, 0)):
+    if isaac_version_tuple not in ((5, 0, 0)):
         click.echo(f"Isaac Sim version {isaac_version_str} is not supported by OmniGibson.")
         return False
 
@@ -301,12 +301,12 @@ def setup_omnigibson(install_datasets: bool, launcher_install: bool, isaac_sim_p
     # Check that we are in a conda environment
     if "CONDA_PREFIX" not in os.environ:
         click.echo("Please run this script from within a conda environment.")
-        click.echo("You can create one by running `conda create -n omnigibson python=3.10`.")
+        click.echo("You can create one by running `conda create -n omnigibson python=3.11`.")
         return
 
     # Check that the current interpreter is Python 3.10
-    if sys.version_info[:2] != (3, 10):
-        click.echo("Please run this script with Python 3.10.")
+    if sys.version_info[:2] != (3, 11):
+        click.echo("Please run this script with Python 3.11.")
         return
 
     # Check that we do not have an EXP_PATH, CARB_APP_PATH or ISAAC_PATH set
@@ -350,6 +350,9 @@ def setup_omnigibson(install_datasets: bool, launcher_install: bool, isaac_sim_p
     cryptography_path = Path(os.environ["ISAAC_PATH"]) / "exts/omni.pip.cloud/pip_prebundle/cryptography"
     if cryptography_path.exists():
         shutil.rmtree(str(cryptography_path))
+
+    # Remove packaging, there is a conflict where isaacsim enforces 23.0 but omni kit ships with 25.0????? Why????
+    # TODO; located at: /home/josiahw/miniforge3/envs/b1k/lib/python3.11/site-packages/isaacsim/extscache/omni.services.pip_archive-0.16.0+107.0.3.lx64.cp311/pip_prebundle/packaging
 
     click.echo("Isaac Sim has been successfully installed.")
 
