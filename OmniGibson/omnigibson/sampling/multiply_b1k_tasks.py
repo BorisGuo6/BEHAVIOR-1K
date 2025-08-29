@@ -1,30 +1,11 @@
-import logging
 import os
-import yaml
-import copy
-import time
 import argparse
-import bddl
-import pkgutil
 import omnigibson as og
 from omnigibson.macros import gm, macros
 import json
-import csv
-import traceback
 from omnigibson.objects import DatasetObject
-from omnigibson.object_states import Contains
-from omnigibson.tasks import BehaviorTask
-from omnigibson.systems import MicroPhysicalParticleSystem
-from omnigibson.systems.system_base import PhysicalParticleSystem, VisualParticleSystem
-from omnigibson.utils.python_utils import clear as clear_pu
-from omnigibson.utils.python_utils import create_object_from_init_info
-from omnigibson.utils.bddl_utils import OBJECT_TAXONOMY
-from omnigibson.utils.constants import PrimType
-from bddl.activity import Conditions, evaluate_state
-from utils import *
 import numpy as np
-import random
-import logging
+from utils import validate_task
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--scene_model", type=str, default=None, help="Scene model to sample tasks in")
@@ -133,7 +114,7 @@ def main():
     # Store the state without any particles
     initial_state = og.sim.dump_state()
 
-    num_trials = 30
+    num_trials = 50
     for activity_instance_id in range(args.start_idx, args.end_idx + 1):
         for i in range(num_trials):
             og.sim.load_state(initial_state)
@@ -145,6 +126,13 @@ def main():
             if error_msg is not None:
                 print(f"instance {activity_instance_id} trial {i} sampling failed: {error_msg}")
                 continue
+
+            for _ in range(10):
+                og.sim.step()
+
+            for obj in env._task.object_scope.values():
+                if isinstance(obj, DatasetObject):
+                    obj.keep_still()
 
             for _ in range(10):
                 og.sim.step()
