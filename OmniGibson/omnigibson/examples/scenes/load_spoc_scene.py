@@ -2,6 +2,7 @@ import csv
 import gzip
 import pathlib
 import json
+import traceback
 import os
 
 import numpy as np
@@ -20,10 +21,9 @@ from scipy.spatial.transform import Rotation as R
 import omnigibson as og
 from omnigibson.macros import gm
 
-OBJAVERSE_HOUSES_DIR = "/home/cgokmen/projects/spoc-data"
 AI2_OBJECTS = json.loads((pathlib.Path(gm.DATA_PATH) / "ai2thor" / "object_name_mapping.json").read_text())
 SPOC_OBJECTS = json.loads((pathlib.Path(gm.DATA_PATH) / "spoc" / "object_name_mapping.json").read_text())
-MDL_MATERIAL_ROOT = "/home/cgokmen/Downloads/Base_Materials_NVD@10013/Materials/2023_2_1"
+MDL_MATERIAL_ROOT = "/fsx-siro/cgokmen/og-materials/Materials/2023_2_1"
 
 def convert_csv_to_dict(filepath):
     """
@@ -45,7 +45,7 @@ AI2_MDL_MAPPING = convert_csv_to_dict(AI2_MDL_MAPPING_FN)
 MDL_PATHS_FN = "/home/cgokmen/projects/BEHAVIOR-1K/slurm/material_paths.csv"
 MDL_PATHS = convert_csv_to_dict(MDL_PATHS_FN)
 ROTATE_EVERYTHING_BY = th.as_tensor(R.from_euler("x", 90, degrees=True).as_quat())
-with open("/home/cgokmen/Downloads/annotations.json") as f:
+with open("/fsx-siro/cgokmen/procthor/assets/2023_07_28/annotations.json") as f:
     ANNOTATIONS = json.load(f)
 
 def load_object(mesh_name, fixed_base):
@@ -192,20 +192,23 @@ def unity_euler_to_rh_quaternion(unity_euler_degrees):
 
 def process_objects(objects):
     for objinfo in objects:
-        obj_name = objinfo["id"]
-        model = objinfo["assetId"]
-        obj = load_object(model, objinfo["kinematic"])
-        position = th.tensor(
-            [-objinfo["position"]["x"], objinfo["position"]["y"], objinfo["position"]["z"]]
-        )
-        orn = th.as_tensor(unity_euler_to_rh_quaternion(
-            [objinfo["rotation"]["x"], objinfo["rotation"]["y"], objinfo["rotation"]["z"]]
-        ), dtype=th.float32)
+        try:
+            obj_name = objinfo["id"]
+            model = objinfo["assetId"]
+            obj = load_object(model, objinfo["kinematic"])
+            position = th.tensor(
+                [-objinfo["position"]["x"], objinfo["position"]["y"], objinfo["position"]["z"]]
+            )
+            orn = th.as_tensor(unity_euler_to_rh_quaternion(
+                [objinfo["rotation"]["x"], objinfo["rotation"]["y"], objinfo["rotation"]["z"]]
+            ), dtype=th.float32)
 
-        rotated_pos, rotated_orn = T.pose_transform(th.zeros(3), ROTATE_EVERYTHING_BY, position, orn)
+            rotated_pos, rotated_orn = T.pose_transform(th.zeros(3), ROTATE_EVERYTHING_BY, position, orn)
 
-        # rotate the object such that we know the scale inside the bbox
-        obj.set_bbox_center_position_orientation(rotated_pos, rotated_orn)
+            # rotate the object such that we know the scale inside the bbox
+            obj.set_bbox_center_position_orientation(rotated_pos, rotated_orn)
+        except Exception as e:
+            print(f"Could not load {obj_name} ({model})", traceback.format_exc())
 
         if "children" in objinfo:
             process_objects(objinfo["children"])  # global_transform)
@@ -237,19 +240,25 @@ def process_scene(scene):
     process_objects(scene["objects"])
 
     og.sim.play()
-    for _ in range(200):
+    for _ in range(500):
         og.sim.step()
 
 
-def load_spoc_house(split, i):
-    print("Loading houses...")
+def load_spoc_scene(scene_name):
+    split, i = scene_name.rsplit("_", 1)
+    i = int(i)
     raw_houses = []
-    with open(os.path.join(OBJAVERSE_HOUSES_DIR, f"{split}.jsonl"), "r") as f:
+
+    print("Seeking")
+    with open(split, "r") as f:
         for j, line in enumerate(f):
             if j < i:
                 continue
+            print("Found. Loading")
             process_scene(json.loads(line))
             break
+        else:
+            raise ValueError(f"Scene {scene_name} not found.")
 
 
 if __name__ == "__main__":
@@ -258,7 +267,7 @@ if __name__ == "__main__":
     else:
         og.launch()
         
-    load_spoc_house("val", 3)
+    load_spoc_scene("val_3")
 
     while True:
         og.sim.render()

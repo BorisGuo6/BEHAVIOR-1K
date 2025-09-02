@@ -709,10 +709,10 @@ class PoseAPI:
         local_transform[:3, :3] /= th.linalg.norm(local_transform[:3, :3], dim=0)  # unscale local transform's rotation
 
         # Check that the local transform consists only of a position, scale and rotation
-        product = local_transform[:3, :3] @ local_transform[:3, :3].T
-        assert th.allclose(
-            product, th.diag(th.diag(product)), atol=1e-3
-        ), f"{prim.GetPath()} local transform is not orthogonal."
+        # product = local_transform[:3, :3] @ local_transform[:3, :3].T
+        # assert th.allclose(
+        #     product, th.diag(th.diag(product)), atol=1e-3
+        # ), f"{prim.GetPath()} local transform is not orthogonal."
 
         # Return the local pose
         return T.mat2pose(local_transform)

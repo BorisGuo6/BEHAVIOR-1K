@@ -79,7 +79,7 @@ def load_habitat_scene(dataset_name, scene_input_json):
     og.sim.play()
 
     # Take a sim step
-    for _ in range(100):
+    for _ in range(500):
         og.sim.step()
 
 
