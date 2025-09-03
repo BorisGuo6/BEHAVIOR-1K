@@ -679,7 +679,7 @@ class PoseAPI:
         from omnigibson.utils.deprecated_utils import _get_world_pose_transform_w_scale
 
         result_transform = _get_world_pose_transform_w_scale(cls.PRIMS[prim_path])
-        scale, shear, quat, translate = T.decompose_mat(th.as_tensor(result_transform).unsqueeze(0))
+        scale, shear, quat, translate = T.decompose_mat(th.as_tensor(result_transform).T.unsqueeze(0))
         return translate.squeeze(0), quat.squeeze(0)
 
     @classmethod
