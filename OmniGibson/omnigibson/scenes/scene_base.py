@@ -540,7 +540,16 @@ class Scene(Serializable, Registerable, Recreatable, ABC):
             init_state = recursively_convert_to_torch(init_state)
             # In VectorEnvironment, the scene pose loaded from the file should be updated
             init_state["pos"], init_state["ori"] = self._pose_info["pos_ori"]
-            for obj_name, obj_info in init_state["registry"]["object_registry"].items():
+            # Handle both old and new scene file formats
+            if "registry" in init_state and "object_registry" in init_state["registry"]:
+                object_registry = init_state["registry"]["object_registry"]
+            elif "object_registry" in init_state:
+                object_registry = init_state["object_registry"]
+            else:
+                # If no object registry found, skip the pose transformation
+                object_registry = {}
+            
+            for obj_name, obj_info in object_registry.items():
                 # Convert the pose to be in the scene's coordinate frame
                 pos, ori = obj_info["root_link"]["pos"], obj_info["root_link"]["ori"]
                 # apply scene pose to all objects in this scene
@@ -1158,7 +1167,16 @@ class Scene(Serializable, Registerable, Recreatable, ABC):
         # TODO: Remove backwards compatible check once new scene RC is updated
         if "pos" in state:
             self.set_position_orientation(position=state["pos"], orientation=state["ori"])
-            self._registry.load_state(state=state["registry"], serialized=False)
+            # Handle both old and new scene file formats
+            if "registry" in state:
+                registry_state = state["registry"]
+            else:
+                # Convert new format to old format for registry
+                registry_state = {
+                    "object_registry": state.get("object_registry", {}),
+                    "system_registry": state.get("system_registry", {})
+                }
+            self._registry.load_state(state=registry_state, serialized=False)
         else:
             self._registry.load_state(state=state, serialized=False)
 

@@ -14,7 +14,10 @@ from pathlib import Path
 from xml.dom import minidom
 
 import click
-import pymeshlab
+try:
+    import pymeshlab
+except ImportError:
+    pymeshlab = None
 import torch as th
 import trimesh
 
@@ -1854,6 +1857,11 @@ def simplify_convex_hull(tm, max_vertices=60, max_faces=128):
     """
     # If number of faces is less than or equal to @max_faces, simply return directly
     if len(tm.vertices) <= max_vertices:
+        return tm
+
+    # Check if pymeshlab is available
+    if pymeshlab is None:
+        # Fallback: return original mesh if pymeshlab is not available
         return tm
 
     # Use pymeshlab to reduce
